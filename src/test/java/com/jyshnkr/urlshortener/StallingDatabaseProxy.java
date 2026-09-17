@@ -19,23 +19,24 @@ final class StallingDatabaseProxy implements AutoCloseable {
 
   StallingDatabaseProxy(String databaseHost, int databasePort) throws IOException {
     listener = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
-    workers.submit(() -> {
-      while (!listener.isClosed()) {
-        try {
-          Socket client = listener.accept();
-          sockets.add(client);
-          Socket database = new Socket();
-          sockets.add(database);
-          database.connect(new InetSocketAddress(databaseHost, databasePort), 2000);
-          workers.submit(() -> relay(client, database, true));
-          workers.submit(() -> relay(database, client, false));
-        } catch (IOException exception) {
-          if (!listener.isClosed()) {
-            throw new IllegalStateException("Test database relay failed", exception);
+    workers.submit(
+        () -> {
+          while (!listener.isClosed()) {
+            try {
+              Socket client = listener.accept();
+              sockets.add(client);
+              Socket database = new Socket();
+              sockets.add(database);
+              database.connect(new InetSocketAddress(databaseHost, databasePort), 2000);
+              workers.submit(() -> relay(client, database, true));
+              workers.submit(() -> relay(database, client, false));
+            } catch (IOException exception) {
+              if (!listener.isClosed()) {
+                throw new IllegalStateException("Test database relay failed", exception);
+              }
+            }
           }
-        }
-      }
-    });
+        });
   }
 
   int port() {

@@ -1,12 +1,16 @@
 package com.jyshnkr.urlshortener.links.exception;
 
-public class CreationFailure extends RuntimeException {
+public class LinkFailure extends RuntimeException {
 
-  public enum Reason { INVALID_INPUT, UNAVAILABLE }
+  public enum Reason {
+    INVALID_INPUT,
+    NOT_FOUND,
+    UNAVAILABLE
+  }
 
   private final Reason reason;
 
-  public CreationFailure(Reason reason, String detail) {
+  public LinkFailure(Reason reason, String detail) {
     super(detail);
     this.reason = reason;
   }

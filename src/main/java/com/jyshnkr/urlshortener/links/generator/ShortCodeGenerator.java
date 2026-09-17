@@ -5,7 +5,8 @@ import java.util.function.Supplier;
 
 public final class ShortCodeGenerator implements Supplier<String> {
 
-  private static final String ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  private static final String ALPHABET =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   private final SecureRandom random = new SecureRandom();
 
   @Override

@@ -2,7 +2,7 @@ package com.jyshnkr.urlshortener.links.service;
 
 import com.jyshnkr.urlshortener.links.config.LinksSettings;
 import com.jyshnkr.urlshortener.links.dao.LinkStore;
-import com.jyshnkr.urlshortener.links.exception.CreationFailure;
+import com.jyshnkr.urlshortener.links.exception.LinkFailure;
 import com.jyshnkr.urlshortener.links.model.CreationOutcome;
 import com.jyshnkr.urlshortener.links.model.Link;
 import com.jyshnkr.urlshortener.links.validation.DestinationUrlValidator;
@@ -39,6 +39,6 @@ public class LinkCreationService {
         return new CreationOutcome(previous.get(), false);
       }
     }
-    throw new CreationFailure(CreationFailure.Reason.UNAVAILABLE, "Could not allocate a short code.");
+    throw new LinkFailure(LinkFailure.Reason.UNAVAILABLE, "Could not allocate a short code.");
   }
 }

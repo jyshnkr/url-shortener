@@ -10,17 +10,27 @@ public record LinksSettings(String baseUrl) {
   }
 
   private static String validateBaseUrl(String baseUrl) {
+    if (baseUrl == null) {
+      throw invalidBaseUrl();
+    }
     try {
       URI base = new URI(baseUrl);
       if (("http".equalsIgnoreCase(base.getScheme()) || "https".equalsIgnoreCase(base.getScheme()))
-          && base.getHost() != null && base.getRawUserInfo() == null
-          && base.getRawQuery() == null && base.getRawFragment() == null && base.getPort() <= 65535) {
+          && base.getHost() != null
+          && base.getRawUserInfo() == null
+          && base.getRawQuery() == null
+          && base.getRawFragment() == null
+          && base.getPort() <= 65535) {
         return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
       }
-    } catch (URISyntaxException | NullPointerException ignored) {
+    } catch (URISyntaxException ignored) {
       // Configuration errors must not echo a potentially sensitive value.
     }
-    throw new IllegalArgumentException("shortener.base-url must be an HTTP(S) base URL without credentials, query or fragment.");
+    throw invalidBaseUrl();
   }
 
+  private static IllegalArgumentException invalidBaseUrl() {
+    return new IllegalArgumentException(
+        "shortener.base-url must be an HTTP(S) base URL without credentials, query or fragment.");
+  }
 }

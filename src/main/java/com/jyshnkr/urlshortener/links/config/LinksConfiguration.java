@@ -3,6 +3,7 @@ package com.jyshnkr.urlshortener.links.config;
 import com.jyshnkr.urlshortener.links.dao.LinkStore;
 import com.jyshnkr.urlshortener.links.generator.ShortCodeGenerator;
 import com.jyshnkr.urlshortener.links.service.LinkCreationService;
+import com.jyshnkr.urlshortener.links.service.LinkResolutionService;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -24,6 +25,11 @@ class LinksConfiguration {
   @Bean
   ShortCodeGenerator shortCodeGenerator() {
     return new ShortCodeGenerator();
+  }
+
+  @Bean
+  LinkResolutionService linkResolutionService(LinkStore store) {
+    return new LinkResolutionService(store);
   }
 
   @Bean

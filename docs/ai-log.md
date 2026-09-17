@@ -22,11 +22,27 @@ Selected decisions from the restart discussion; not a full transcript.
 
 ## Phase 2A revision: URL-only creation
 
-- **Authorized:** the user supplied the revision plan and explicitly requested implementation and verification. Existing uncommitted work was the baseline; final acceptance remains pending.
+- **Authorized:** the user supplied the revision plan and explicitly requested implementation and verification. Existing uncommitted work was the baseline; acceptance was pending at delivery (later disposition below).
 - **AI contribution:** changed the HTTP contract to 201 creation/200 destination reuse, rejected legacy headers, separated `links` responsibilities, and added transactional V2 without modifying V1. The service receives its DAO and validated settings; SQL owns fingerprints and storage-failure translation.
 - **Evidence:** failing URL-only and migration checks preceded the implementation. Focused regressions passed; [testing](testing.md#current-checks-and-results) records the final gate. Added concurrency, long Unicode, fingerprint mismatch, legacy migration preservation/rollback and lock-wait checks. [Brownfield scenario](scenarios/02-brownfield.md) records the actual change to the working baseline.
 - **Boundaries:** only disposable PostgreSQL test containers were used. Development/archive data, dependencies and prior configuration work were preserved. No staging, commit, push or deployment.
 - **Review and disposition:** separate read-only standards and behavior/spec reviews found zero actionable findings. The final clean build passed 24 unit + 66 integration cases, with no failures/errors/skips; diff and local documentation-path checks passed. Implementation is ready for human review; acceptance is not inferred from the implementation request.
+
+## Phase 2B: follow short links
+
+- **Human disposition:** the supplied plan records the user's “looks good” as Phase 2A acceptance. Its push is user-reported, not independently verified here. Phase 2B was explicitly authorized for implementation and verification from clean `5e1d8ca`; it remains pending human review.
+- **AI contribution:** added resolution in the existing controller/service/DAO boundaries, shared `LinkFailure` with a not-found reason, parameterized code lookup and HTTP-only destination encoding. Creation response fields/statuses and stored destination text remain unchanged.
+- **Test-first evidence:** [testing](testing.md#current-checks-and-results) records the failed redirect, validation, error-header, Unicode and retry-guidance checks and focused results. Extended the existing lifecycle suite and reused its test-only stall fixture.
+- **Correction:** a maximum-length Unicode redirect exposed Tomcat's default response-header limit. Raised only its response allowance to 32 KB; no dependency, schema or database-timeout change. Corrected an off-by-one test fixture length without weakening destination validation.
+- **Boundaries:** only disposable PostgreSQL databases were started/migrated. No development/archive database work, staging, commit, push or deployment. Analytics, expiration, authentication and performance measurement remain deferred.
+- **Review and disposition:** the final `./mvnw -B -ntp clean verify` passed 37 unit + 81 integration cases, with zero failures/errors/skips; documentation paths and whitespace checks passed. Separate read-only reviews against `5e1d8ca` (including all new files) found zero actionable standards findings and zero actionable behavior/spec findings. The engineer decides acceptance.
+
+## Automated quality and security checks
+
+- **User direction:** explicitly deferred expiration and API-key protection, asked to prioritize automated quality/security checks, and requested continuation after interrupting a tool call. Existing Phase 2B changes were preserved; no new acceptance, commit or push is inferred.
+- **AI contribution:** added pinned Spotless and SpotBugs/Find Security Bugs Maven gates, a resolved CycloneDX dependency inventory, digest-pinned OSV/Gitleaks scans and a least-privilege GitHub Actions workflow. Formatting changed 16 Java files. Static analysis prompted an explicit null guard; seven informational/context-specific findings have narrowly scoped, explained exclusions.
+- **Evidence:** [testing](testing.md#current-checks-and-results) records the failing initial checks, clean regression pass and successful dependency/secret scans. Synthetic bad inputs proved both scanners fail on findings. The security scan found no known vulnerable dependencies, so no runtime upgrade was made.
+- **Boundaries and disposition:** build-tool additions only; schema, runtime dependencies and development/archive databases are unchanged. Performance and clean-checkout reproduction remain next. Hosted CI is configured but not executed; no staging, commit, push or deployment. Standards review found no actionable issue. Behavior review caught a shared path exclusion that could hide historical secrets under `target/`; separate scan configs fixed it, a synthetic path-rule probe detected the fake secret, and re-review found no remaining actionable issue. Workflow, shell and documentation checks passed; ready for human review.
 
 ## Tomcat patch decision
 

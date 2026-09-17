@@ -35,11 +35,18 @@ class DestinationMigrationIT {
       var after = jdbc.queryForMap("SELECT * FROM short_links");
       assertThat(after).containsAllEntriesOf(before);
       assertThat((byte[]) after.get("destination_hash"))
-          .isEqualTo(java.util.HexFormat.of().parseHex(
-              "7890a941ef9431d8b27559905f7d149488dfe272c9b222723f46938e1b1f6149"));
-      assertThat(jdbc.queryForObject("SELECT count(*) FROM short_links", Integer.class)).isEqualTo(1);
-      var service = new LinkCreationService(new LinkStore(jdbc.getDataSource()),
-          new LinksSettings("https://changed.example"), () -> { throw new AssertionError("Must reuse"); });
+          .isEqualTo(
+              java.util.HexFormat.of()
+                  .parseHex("7890a941ef9431d8b27559905f7d149488dfe272c9b222723f46938e1b1f6149"));
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM short_links", Integer.class))
+          .isEqualTo(1);
+      var service =
+          new LinkCreationService(
+              new LinkStore(jdbc.getDataSource()),
+              new LinksSettings("https://changed.example"),
+              () -> {
+                throw new AssertionError("Must reuse");
+              });
       var reused = service.create("https://example.com/é/🚀");
       assertThat(reused.created()).isFalse();
       assertThat(reused.link().code()).isEqualTo("LegacyCode");
@@ -59,16 +66,27 @@ class DestinationMigrationIT {
 
       assertThatThrownBy(() -> migrate(database, null)).isInstanceOf(RuntimeException.class);
 
-      assertThat(jdbc.queryForList("SELECT * FROM short_links ORDER BY short_code")).isEqualTo(before);
-      assertThat(jdbc.queryForObject("""
+      assertThat(jdbc.queryForList("SELECT * FROM short_links ORDER BY short_code"))
+          .isEqualTo(before);
+      assertThat(
+              jdbc.queryForObject(
+                  """
           SELECT count(*) FROM information_schema.columns
           WHERE table_name = 'short_links' AND column_name = 'destination_hash'
-          """, Integer.class)).isZero();
-      assertThat(jdbc.queryForObject("""
+          """,
+                  Integer.class))
+          .isZero();
+      assertThat(
+              jdbc.queryForObject(
+                  """
           SELECT column_default FROM information_schema.columns
           WHERE table_name = 'short_links' AND column_name = 'creation_request_id'
-          """, String.class)).isNull();
-      assertThat(jdbc.queryForList("SELECT version FROM flyway_schema_history WHERE success", String.class))
+          """,
+                  String.class))
+          .isNull();
+      assertThat(
+              jdbc.queryForList(
+                  "SELECT version FROM flyway_schema_history WHERE success", String.class))
           .containsExactly("1");
     }
   }
@@ -78,8 +96,9 @@ class DestinationMigrationIT {
     try (var database = new PostgreSQLContainer("postgres:17.11")) {
       database.start();
       migrate(database, "1");
-      try (var lock = DriverManager.getConnection(
-          database.getJdbcUrl(), database.getUsername(), database.getPassword());
+      try (var lock =
+              DriverManager.getConnection(
+                  database.getJdbcUrl(), database.getUsername(), database.getPassword());
           var callers = Executors.newSingleThreadExecutor()) {
         lock.setAutoCommit(false);
         try (var statement = lock.createStatement()) {
@@ -89,21 +108,26 @@ class DestinationMigrationIT {
           var migration = callers.submit(() -> migrate(database, null));
           assertThatThrownBy(() -> migration.get(10, TimeUnit.SECONDS))
               .isInstanceOf(ExecutionException.class)
-              .rootCause().isInstanceOfSatisfying(SQLException.class,
-                  error -> assertThat(error.getSQLState()).isEqualTo("55P03"));
+              .rootCause()
+              .isInstanceOfSatisfying(
+                  SQLException.class, error -> assertThat(error.getSQLState()).isEqualTo("55P03"));
         } finally {
           lock.rollback();
         }
       }
-      assertThat(jdbc(database).queryForList(
-          "SELECT version FROM flyway_schema_history WHERE success", String.class)).containsExactly("1");
+      assertThat(
+              jdbc(database)
+                  .queryForList(
+                      "SELECT version FROM flyway_schema_history WHERE success", String.class))
+          .containsExactly("1");
       migrate(database, null);
     }
   }
 
   private void migrate(PostgreSQLContainer database, String target) {
-    var configuration = Flyway.configure()
-        .dataSource(database.getJdbcUrl(), database.getUsername(), database.getPassword());
+    var configuration =
+        Flyway.configure()
+            .dataSource(database.getJdbcUrl(), database.getUsername(), database.getPassword());
     if (target != null) {
       configuration.target(target);
     }
@@ -111,13 +135,18 @@ class DestinationMigrationIT {
   }
 
   private JdbcTemplate jdbc(PostgreSQLContainer database) {
-    return new JdbcTemplate(new DriverManagerDataSource(
-        database.getJdbcUrl(), database.getUsername(), database.getPassword()));
+    return new JdbcTemplate(
+        new DriverManagerDataSource(
+            database.getJdbcUrl(), database.getUsername(), database.getPassword()));
   }
 
   private void insertLegacy(JdbcTemplate jdbc, String code, String destination) {
-    jdbc.update("INSERT INTO short_links VALUES (?, ?, ?, ?, ?)", code, destination,
-        UUID.randomUUID(), "https://legacy.example/r/" + code,
+    jdbc.update(
+        "INSERT INTO short_links VALUES (?, ?, ?, ?, ?)",
+        code,
+        destination,
+        UUID.randomUUID(),
+        "https://legacy.example/r/" + code,
         OffsetDateTime.parse("2026-09-16T18:00:00Z"));
   }
 }

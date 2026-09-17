@@ -30,7 +30,8 @@ import org.springframework.transaction.annotation.Transactional;
 class FoundationIT {
 
   private static final UUID REQUEST_ID = UUID.fromString("fd604efa-9182-486e-818a-e9c00c1d6287");
-  private static final UUID OTHER_REQUEST_ID = UUID.fromString("bd5bb23b-a218-410d-aa14-b8f93193e03b");
+  private static final UUID OTHER_REQUEST_ID =
+      UUID.fromString("bd5bb23b-a218-410d-aa14-b8f93193e03b");
   private static final OffsetDateTime CREATED_AT = OffsetDateTime.parse("2026-09-16T18:00:00Z");
 
   @LocalServerPort private int port;
@@ -102,7 +103,12 @@ class FoundationIT {
   @ParameterizedTest
   @ValueSource(
       strings = {
-        "short_code", "destination_url", "creation_request_id", "short_url", "created_at", "destination_hash"
+        "short_code",
+        "destination_url",
+        "creation_request_id",
+        "short_url",
+        "created_at",
+        "destination_hash"
       })
   @Transactional
   void allCreationResultFieldsAreRequired(String column) {
@@ -141,36 +147,41 @@ class FoundationIT {
   @Transactional
   void duplicateDestinationsAreRejected() {
     insertLink("Ab3dE6gH9J", REQUEST_ID);
-    assertThatThrownBy(() -> insertLink("Zy9xW6vU3T", OTHER_REQUEST_ID,
-        "https://example.com/Ab3dE6gH9J"))
+    assertThatThrownBy(
+            () -> insertLink("Zy9xW6vU3T", OTHER_REQUEST_ID, "https://example.com/Ab3dE6gH9J"))
         .isInstanceOf(DuplicateKeyException.class);
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {
-      "UPDATE short_links SET destination_hash = decode('00', 'hex')",
-      "UPDATE short_links SET destination_url = 'https://changed.example'"
-  })
+  @ValueSource(
+      strings = {
+        "UPDATE short_links SET destination_hash = decode('00', 'hex')",
+        "UPDATE short_links SET destination_url = 'https://changed.example'"
+      })
   @Transactional
   void fingerprintsMustMatchTheStoredDestination(String sql) {
     insertLink("Ab3dE6gH9J", REQUEST_ID);
     assertThatThrownBy(() -> jdbc.update(sql))
         .isInstanceOf(DataIntegrityViolationException.class)
-        .rootCause().isInstanceOfSatisfying(SQLException.class,
-            error -> assertThat(error.getSQLState()).isEqualTo("23514"));
+        .rootCause()
+        .isInstanceOfSatisfying(
+            SQLException.class, error -> assertThat(error.getSQLState()).isEqualTo("23514"));
   }
 
   @Test
   @Transactional
   void newRowsReceiveDatabaseGeneratedInternalIds() {
-    jdbc.update("""
+    jdbc.update(
+        """
         INSERT INTO short_links (short_code, destination_url, destination_hash, short_url, created_at)
         VALUES ('DefaultId1', 'https://example.com/default',
           sha256(convert_to('https://example.com/default', 'UTF8')),
           'https://short.example/r/DefaultId1', CURRENT_TIMESTAMP)
         """);
-    var identity = jdbc.queryForObject(
-        "SELECT creation_request_id FROM short_links WHERE short_code = 'DefaultId1'", UUID.class);
+    var identity =
+        jdbc.queryForObject(
+            "SELECT creation_request_id FROM short_links WHERE short_code = 'DefaultId1'",
+            UUID.class);
     assertThat(identity).isNotNull();
     assertThat(identity.version()).isEqualTo(4);
   }

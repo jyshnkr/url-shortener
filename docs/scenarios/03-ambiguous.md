@@ -6,5 +6,5 @@
 - **Decision:** record usage separately through a bounded queue; never wait for space, and make recording failures visible.
 - **Tradeoff:** counts may lag or miss events. Correct destinations remain mandatory; failed database lookups can still prevent redirects.
 - **Task order:** build redirects, agree counting rules and limits, add recording, then test failure isolation.
-- **Execution so far:** discussion and design agreement only.
+- **Execution so far:** analytics discussion and design agreement only. Phase 2B implements redirects and safe database-failure responses; it does not implement or demonstrate analytics failure isolation.
 - **Validation planned:** check normal counts, simultaneous updates, slow/failed recording and a full queue; redirects must remain unaffected by recording failures.

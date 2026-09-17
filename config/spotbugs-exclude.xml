@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+  <!-- Inventory markers, not vulnerabilities: these are the intended public HTTP handlers. -->
+  <Match>
+    <Class name="com.jyshnkr.urlshortener.links.controller.LinksController"/>
+    <Method name="~create|redirect"/>
+    <Bug pattern="SPRING_ENDPOINT"/>
+  </Match>
+  <!-- URI parsing restricts schemes to ASCII before these case-insensitive HTTP(S) checks.
+       Neither method case-folds or normalizes the destination text. -->
+  <Match>
+    <Class name="com.jyshnkr.urlshortener.links.config.LinksSettings"/>
+    <Method name="validateBaseUrl"/>
+    <Bug pattern="IMPROPER_UNICODE"/>
+  </Match>
+  <Match>
+    <Class name="com.jyshnkr.urlshortener.links.validation.DestinationUrlValidator"/>
+    <Method name="validate"/>
+    <Bug pattern="IMPROPER_UNICODE"/>
+  </Match>
+  <!-- Constructor injection intentionally shares the DAO. LinkStore is final, exposes no
+       mutable configuration, and uses a private final JdbcTemplate configured at construction. -->
+  <Match>
+    <Class name="~com\.jyshnkr\.urlshortener\.links\.service\.Link(Creation|Resolution)Service"/>
+    <Method name="&lt;init&gt;"/>
+    <Field name="store"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+</FindBugsFilter>

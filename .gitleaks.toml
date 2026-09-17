@@ -1,0 +1,4 @@
+title = "URL shortener history secret checks"
+
+[extend]
+useDefault = true

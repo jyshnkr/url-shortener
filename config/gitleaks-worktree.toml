@@ -1,0 +1,8 @@
+title = "URL shortener working-tree secret checks"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated build output is not source; history is scanned without these exclusions."
+paths = ['''(^|/)target/''', '''(^|/)\.git/''']

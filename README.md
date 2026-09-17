@@ -2,7 +2,7 @@
 
 A Java/Spring Boot URL shortener, built collaboratively in small reviewed increments.
 
-**Phase 1 accepted; Phase 2A creation implemented, awaiting human review.** URL-only creation, destination reuse and database constraints are tested locally. Redirect, expiration, analytics and optional API-key protection are not implemented. See [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
+**Phases 1 and 2A accepted; Phase 2B redirects implemented, awaiting human review.** URL-only creation, destination reuse and following short links are covered by local tests. Expiration, analytics and API-key protection are deferred. Automated quality and security checks are now configured; see [verification](docs/testing.md). See [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
 
 ## Prerequisites
 
@@ -42,7 +42,16 @@ curl -i http://127.0.0.1:8080/api/v1/links \
 - Repeat the exact destination to receive `200` with the original result and `Location`. Different destination strings create independent mappings.
 - Send no `Idempotency-Key` header: even an empty value returns `400` with instructions to remove it.
 - The short URL defaults to `http://localhost:8080/r/{code}`. Set `SHORTENER_BASE_URL` before startup to change the trusted base; request headers cannot choose it. Previously saved results keep their original base.
-- **Following the short URL is not implemented yet.** Input and error rules: [architecture](docs/architecture.md#creation-contract).
+
+Follow the returned `shortUrl` in a browser, or substitute its code below:
+
+```sh
+curl -i http://localhost:8080/r/RETURNED_CODE   # Inspect the 302 and destination Location
+curl -I http://localhost:8080/r/RETURNED_CODE   # HEAD: same status/headers, no body
+curl -L http://localhost:8080/r/RETURNED_CODE   # Let curl follow the destination
+```
+
+A saved code returns `302`, the destination in `Location`, `Cache-Control: no-store`, and no body. Unknown or malformed codes return safe JSON `404`; storage failures return `503` with retry guidance. Codes are case-sensitive. The service never fetches destinations; `curl -L` or your browser does that. Input and error rules: [architecture](docs/architecture.md#redirect-contract).
 
 The application and PostgreSQL bind to loopback by default. The database username `url_shortener` and password `local-development-only` are public **local demo credentials**, not production secrets. Do not expose this configuration publicly. For a different environment, Spring accepts `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`; configure the database consistently too.
 
@@ -59,8 +68,11 @@ This retains the development database in `url-shortener-restart_postgres_data`. 
 With Docker running (Compose does not need to be running):
 
 ```sh
-./mvnw verify
+./mvnw verify                   # Formatting, tests and static bug/security analysis
+bash scripts/security-checks.sh # Dependency vulnerabilities and redacted secret scans
 ```
+
+Security scans need Bash and Docker; dependency scanning also needs network access. Reports are written under `target/security/`. The GitHub Actions workflow runs both commands on PRs, main-branch pushes, manual runs and a weekly schedule once published.
 
 Tests provision their own PostgreSQL; they do not use the development database. `./mvnw test` does **not** run integration tests; use `verify`. See [testing](docs/testing.md) for test names, commands, observed results and remaining quality gates.
 
@@ -68,7 +80,7 @@ On Windows, use `mvnw.cmd` in place of `./mvnw` and `curl.exe` if your shell ali
 
 ## Layout
 
-- `src/main/java`: Spring Boot entry point and the `links` creation module.
+- `src/main/java`: Spring Boot entry point and the `links` creation and resolution module.
 - `src/main/resources/db/migration`: Flyway schema migrations.
 - `src/test/java`: validation unit tests and isolated PostgreSQL/API integration tests.
 - `docs/`: the documentation below; each file owns one topic.

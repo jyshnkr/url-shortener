@@ -1,6 +1,6 @@
 # URL Shortening
 
-The language of creating or reusing short links and understanding their usage. Each exact destination string has one service-wide mapping.
+The language of creating, reusing and following short links and understanding their usage. Each exact destination string has one service-wide mapping.
 
 ## Language
 
@@ -9,7 +9,7 @@ A shareable link that refers to one fixed destination URL. Submitting the same v
 _Avoid_: Destination URL, original URL (when referring to the short link itself)
 
 **Short code**:
-The service-assigned identifier that distinguishes a short link within the service. It is part of the short link, not the entire shareable URL or its destination.
+The service-assigned identifier that distinguishes a short link within the service. It is exactly ten case-sensitive ASCII letters or digits and is part of the short link, not the entire shareable URL or its destination.
 _Avoid_: Destination ID, custom alias
 
 **Creation request ID**:
@@ -19,6 +19,12 @@ _Avoid_: API key, short code, destination URL (as synonyms for the creation requ
 **Destination URL**:
 The URL a short link refers to and directs a visitor toward. Reuse compares the exact validated string, without trimming, normalization or fetching.
 _Avoid_: Original URL, long URL (prefer the role-based term "destination URL")
+
+**Link resolution**:
+Read the saved mapping for a valid short code. Resolution does not change the mapping or fetch the destination; unknown and malformed codes are not found.
+
+**Redirect**:
+An HTTP 302 response directing the caller to the saved destination through `Location`, with no body and `Cache-Control: no-store`. Non-ASCII characters become UTF-8 percent escapes only in the header; saved text and existing escapes remain unchanged. HEAD returns the corresponding status and headers without a body.
 
 **Creation outcome**:
 The saved link plus an indication of whether this call created it or reused it. HTTP maps these outcomes to 201 and 200 respectively.

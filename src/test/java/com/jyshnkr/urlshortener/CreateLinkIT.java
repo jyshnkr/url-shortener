@@ -38,13 +38,19 @@ class CreateLinkIT {
     var response = create(null, payload);
 
     assertThat(response.statusCode()).isEqualTo(201);
-    assertThat(JSON.readTree(response.body()).get("destinationUrl").stringValue()).isEqualTo(destination);
+    assertThat(JSON.readTree(response.body()).get("destinationUrl").stringValue())
+        .isEqualTo(destination);
   }
 
   private static Stream<String> validDestinations() {
-    return Stream.of("HTTP://EXAMPLE.COM/path?b=2&a=1#Section", "https://example.invalid/a%20b",
-        "http://localhost:9090/test", "http://127.0.0.1/test", "http://[::1]:8080/test",
-        "https://xn--bcher-kva.example/path", "https://example.com/\uD83D\uDE80",
+    return Stream.of(
+        "HTTP://EXAMPLE.COM/path?b=2&a=1#Section",
+        "https://example.invalid/a%20b",
+        "http://localhost:9090/test",
+        "http://127.0.0.1/test",
+        "http://[::1]:8080/test",
+        "https://xn--bcher-kva.example/path",
+        "https://example.com/\uD83D\uDE80",
         "https://example.com/" + "a".repeat(2028));
   }
 
@@ -57,16 +63,26 @@ class CreateLinkIT {
     assertThat(error.get("status").intValue()).isEqualTo(400);
     assertThat(error.get("title").stringValue()).isEqualTo("Bad Request");
     assertThat(error.get("detail").stringValue()).contains("Remove", "Idempotency-Key");
-    assertThat(response.body()).doesNotContain(value.isEmpty() ? "Exception" : value, "SELECT", "INSERT");
+    assertThat(response.body())
+        .doesNotContain(value.isEmpty() ? "Exception" : value, "SELECT", "INSERT");
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"", "[]", "{}", "null", "{", "{\"destinationUrl\":null}",
-      "{\"destinationUrl\":42}", "{\"destinationUrl\":[]}",
-      "{\"destinationUrl\":\"https://example.com/\\uD800\"}",
-      "{\"destinationUrl\":\"https://example.com/\\uDC00\"}",
-      "{\"destinationUrl\":\"https://example.com\"} true",
-      "{\"destinationUrl\":\"https://example.com\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}"})
+  @ValueSource(
+      strings = {
+        "",
+        "[]",
+        "{}",
+        "null",
+        "{",
+        "{\"destinationUrl\":null}",
+        "{\"destinationUrl\":42}",
+        "{\"destinationUrl\":[]}",
+        "{\"destinationUrl\":\"https://example.com/\\uD800\"}",
+        "{\"destinationUrl\":\"https://example.com/\\uDC00\"}",
+        "{\"destinationUrl\":\"https://example.com\"} true",
+        "{\"destinationUrl\":\"https://example.com\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}"
+      })
   void invalidRequestBodiesHaveASafeConsistent400Response(String payload) throws Exception {
     var response = create(null, payload);
 
@@ -75,7 +91,8 @@ class CreateLinkIT {
     assertThat(error.get("status").intValue()).isEqualTo(400);
     assertThat(error.get("title").stringValue()).isEqualTo("Bad Request");
     assertThat(error.get("detail").stringValue()).isNotBlank();
-    assertThat(response.body()).doesNotContain("https://example.com", "Exception", "SELECT", "INSERT");
+    assertThat(response.body())
+        .doesNotContain("https://example.com", "Exception", "SELECT", "INSERT");
   }
 
   @Test
@@ -121,23 +138,27 @@ class CreateLinkIT {
   void obsoleteHeaderNamesAreRejectedRegardlessOfCase(String name) throws Exception {
     var response = create(name, "", "{\"destinationUrl\":\"https://example.com/old-header\"}");
     assertThat(response.statusCode()).isEqualTo(400);
-    assertThat(JSON.readTree(response.body()).get("detail").stringValue()).contains("Remove", "Idempotency-Key");
+    assertThat(JSON.readTree(response.body()).get("detail").stringValue())
+        .contains("Remove", "Idempotency-Key");
   }
 
   @Test
   void aLongUnicodeDestinationCanBeCreatedAndReused() throws Exception {
-    // Varied three-byte characters exceed a B-tree text index entry without being highly compressible.
+    // Varied three-byte characters exceed a B-tree text index entry without being highly
+    // compressible.
     var destination = new StringBuilder("https://example.com/");
     for (int index = 0; index < 2000; index++) {
       destination.append((char) (0x4e00 + index));
     }
-    String payload = JSON.createObjectNode().put("destinationUrl", destination.toString()).toString();
+    String payload =
+        JSON.createObjectNode().put("destinationUrl", destination.toString()).toString();
     var created = create(null, payload);
     var reused = create(null, payload);
     assertThat(created.statusCode()).isEqualTo(201);
     assertThat(reused.statusCode()).isEqualTo(200);
     assertThat(reused.body()).isEqualTo(created.body());
-    assertThat(JSON.readTree(created.body()).get("destinationUrl").stringValue()).isEqualTo(destination.toString());
+    assertThat(JSON.readTree(created.body()).get("destinationUrl").stringValue())
+        .isEqualTo(destination.toString());
   }
 
   @Test
@@ -152,13 +173,17 @@ class CreateLinkIT {
       for (var result : pending) {
         responses.add(result.get(15, TimeUnit.SECONDS));
       }
-      assertThat(responses.stream().filter(response -> response.statusCode() == 201).count()).isEqualTo(1);
-      assertThat(responses.stream().filter(response -> response.statusCode() == 200).count()).isEqualTo(7);
-      assertThat(responses).allSatisfy(response -> {
-        assertThat(response.body()).isEqualTo(responses.getFirst().body());
-        assertThat(response.headers().firstValue("Location"))
-            .isEqualTo(responses.getFirst().headers().firstValue("Location"));
-      });
+      assertThat(responses.stream().filter(response -> response.statusCode() == 201).count())
+          .isEqualTo(1);
+      assertThat(responses.stream().filter(response -> response.statusCode() == 200).count())
+          .isEqualTo(7);
+      assertThat(responses)
+          .allSatisfy(
+              response -> {
+                assertThat(response.body()).isEqualTo(responses.getFirst().body());
+                assertThat(response.headers().firstValue("Location"))
+                    .isEqualTo(responses.getFirst().headers().firstValue("Location"));
+              });
     }
   }
 
@@ -166,13 +191,15 @@ class CreateLinkIT {
     return create("Idempotency-Key", headerValue, body);
   }
 
-  private HttpResponse<String> create(String headerName, String headerValue, String body) throws Exception {
-    var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/links"))
-        .timeout(Duration.ofSeconds(10))
-        .header("Content-Type", "application/json")
-        .header("Forwarded", "host=attacker.invalid;proto=http")
-        .header("X-Forwarded-Host", "attacker.invalid")
-        .POST(HttpRequest.BodyPublishers.ofString(body));
+  private HttpResponse<String> create(String headerName, String headerValue, String body)
+      throws Exception {
+    var request =
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/links"))
+            .timeout(Duration.ofSeconds(10))
+            .header("Content-Type", "application/json")
+            .header("Forwarded", "host=attacker.invalid;proto=http")
+            .header("X-Forwarded-Host", "attacker.invalid")
+            .POST(HttpRequest.BodyPublishers.ofString(body));
     if (headerValue != null) {
       request.header(headerName, headerValue);
     }
