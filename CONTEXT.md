@@ -1,11 +1,11 @@
 # URL Shortening
 
-The language of creating independent short links and understanding their usage. Multiple short links may refer to the same destination.
+The language of creating or reusing short links and understanding their usage. Each exact destination string has one service-wide mapping.
 
 ## Language
 
 **Short link**:
-An independently created, shareable link that refers to one fixed destination URL. Its usage is distinct from that of other short links, even when their destinations are identical.
+A shareable link that refers to one fixed destination URL. Submitting the same validated destination string reuses the saved link.
 _Avoid_: Destination URL, original URL (when referring to the short link itself)
 
 **Short code**:
@@ -13,12 +13,18 @@ The service-assigned identifier that distinguishes a short link within the servi
 _Avoid_: Destination ID, custom alias
 
 **Creation request ID**:
-A required caller-supplied identity for one intended short-link creation, reused when retrying that creation. It is distinct from both the shared API key used for access control and the service-generated short code.
+An internal UUID stored with a mapping. Existing values are retained; PostgreSQL generates new values. It no longer identifies client retries, and the old `Idempotency-Key` header is rejected.
 _Avoid_: API key, short code, destination URL (as synonyms for the creation request ID)
 
 **Destination URL**:
-The URL a short link refers to and directs a visitor toward. The same destination URL may be associated with multiple independent short links.
+The URL a short link refers to and directs a visitor toward. Reuse compares the exact validated string, without trimming, normalization or fetching.
 _Avoid_: Original URL, long URL (prefer the role-based term "destination URL")
+
+**Creation outcome**:
+The saved link plus an indication of whether this call created it or reused it. HTTP maps these outcomes to 201 and 200 respectively.
+
+**Destination fingerprint**:
+SHA-256 of the destination’s UTF-8 bytes, used for indexed lookup and uniqueness. A matching fingerprint still requires a full-string comparison before reuse.
 
 **Expiration time**:
 An optional cutoff fixed when a short link is created; the link is no longer eligible to redirect once that time is reached. It is distinct from a deadline for deleting the link or its usage history.

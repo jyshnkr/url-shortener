@@ -2,7 +2,7 @@
 
 A Java/Spring Boot URL shortener, built collaboratively in small reviewed increments.
 
-**Current stage: foundation only; joint review in progress.** Startup and database constraints have been verified locally. Create, redirect, expiration, analytics and optional API-key protection are not implemented yet. See [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
+**Phase 1 accepted; Phase 2A creation implemented, awaiting human review.** URL-only creation, destination reuse and database constraints are tested locally. Redirect, expiration, analytics and optional API-key protection are not implemented. See [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
 
 ## Prerequisites
 
@@ -28,7 +28,21 @@ In another terminal:
 curl --fail http://127.0.0.1:8080/actuator/health
 ```
 
-The health response should contain `"status":"UP"`; Spring may also list health groups. Flyway applies schema migrations automatically during startup. No short-link endpoints exist yet.
+The health response should contain `"status":"UP"`; Spring may also list health groups. Flyway applies schema migrations automatically during startup. V2 preserves existing mappings, but aborts if duplicate destinations or fingerprint conflicts exist; it never merges or deletes them. See [migration behavior](docs/architecture.md#persistence-and-migration).
+
+Create a link:
+
+```sh
+curl -i http://127.0.0.1:8080/api/v1/links \
+  -H 'Content-Type: application/json' \
+  -d '{"destinationUrl":"https://example.com/docs"}'
+```
+
+- Expect `201`, a `Location` header, and JSON containing `code`, `shortUrl`, `destinationUrl`.
+- Repeat the exact destination to receive `200` with the original result and `Location`. Different destination strings create independent mappings.
+- Send no `Idempotency-Key` header: even an empty value returns `400` with instructions to remove it.
+- The short URL defaults to `http://localhost:8080/r/{code}`. Set `SHORTENER_BASE_URL` before startup to change the trusted base; request headers cannot choose it. Previously saved results keep their original base.
+- **Following the short URL is not implemented yet.** Input and error rules: [architecture](docs/architecture.md#creation-contract).
 
 The application and PostgreSQL bind to loopback by default. The database username `url_shortener` and password `local-development-only` are public **local demo credentials**, not production secrets. Do not expose this configuration publicly. For a different environment, Spring accepts `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`; configure the database consistently too.
 
@@ -54,9 +68,9 @@ On Windows, use `mvnw.cmd` in place of `./mvnw` and `curl.exe` if your shell ali
 
 ## Layout
 
-- `src/main/java`: Spring Boot entry point; business modules arrive with their increments.
+- `src/main/java`: Spring Boot entry point and the `links` creation module.
 - `src/main/resources/db/migration`: Flyway schema migrations.
-- `src/test/java`: isolated PostgreSQL/startup integration tests.
+- `src/test/java`: validation unit tests and isolated PostgreSQL/API integration tests.
 - `docs/`: the documentation below; each file owns one topic.
 - `AGENTS.md`: collaboration boundaries and agent instructions.
 
@@ -71,4 +85,4 @@ On Windows, use `mvnw.cmd` in place of `./mvnw` and `curl.exe` if your shell ali
 | [Greenfield](docs/scenarios/01-greenfield.md) | New-service scope, task sequence, execution and validation |
 | [Brownfield](docs/scenarios/02-brownfield.md) | A later change to a working baseline, with impact and regression evidence |
 | [Ambiguous requirement](docs/scenarios/03-ambiguous.md) | Clarifying availability versus analytics completeness |
-| [Domain language](CONTEXT.md) | Shared meaning of short link, request ID and analytics terms |
+| [Domain language](CONTEXT.md) | Shared meaning of short link, destination reuse and analytics terms |

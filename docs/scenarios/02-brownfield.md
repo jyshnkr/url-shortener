@@ -1,7 +1,10 @@
 # Scenario 2: brownfield change
 
-- **Status:** not selected or implemented.
-- **Candidate:** add optional expiration to a working create/redirect service; subject to agreement.
-- **Dependency:** a reviewed baseline whose existing behavior can be preserved.
-- **Next:** identify affected behavior, code and stored data; agree on small changes and checks.
-- **Evidence later:** actual changes, human decisions and tests showing existing behavior still works.
+- **Status:** URL-only creation revision implemented; human acceptance pending.
+- **Working baseline:** the existing uncommitted Phase 2A API required a client UUID, replayed matching keys with 201, returned 409 for conflicting key reuse, and allowed duplicate destinations. V1 was already established; this baseline had passed its prior creation regression suite but was awaiting review.
+- **Human direction:** implement the supplied Phase 2A revision, preserve existing work and saved mappings, reject the old header, add V2, and verify using disposable databases only. This authorizes implementation, not acceptance.
+- **Change:** exact destinations now share one durable mapping; new calls return 201 and reuse returns 200. The `links` module now separates HTTP, coordination, SQL, validation, generation and configuration responsibilities.
+- **Data impact:** V1 is unchanged. V2 adds checked SHA-256 fingerprints and an internal UUID default. Duplicate destinations abort transactionally; no automatic merging or deletion occurs.
+- **Regression evidence:** [testing](../testing.md#current-checks-and-results) covers HTTP outcomes, concurrent callers, collisions, Unicode, migration preservation/rollback, restart/base changes, outage and stalled network behavior. Superseded request-ID/409 checks were replaced; unrelated validation and foundation checks were retained.
+- **Review walkthrough:** compare the [contract and flow](../architecture.md#creation-contract), [responsibilities](../architecture.md#responsibilities), [V2 migration](../../src/main/resources/db/migration/V2__enforce_destination_reuse.sql), and corresponding tests. The development and archive databases were not started or migrated.
+- **Disposition:** implementation and evidence are ready for human review; no staging, commit, push, dependency change or deployment.

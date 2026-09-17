@@ -75,7 +75,7 @@ class FoundationIT {
     assertThat(result)
         .containsExactly(
             "Ab3dE6gH9J",
-            "https://example.com/docs",
+            "https://example.com/Ab3dE6gH9J",
             REQUEST_ID,
             "http://localhost:8080/r/Ab3dE6gH9J",
             CREATED_AT.toInstant());
@@ -102,7 +102,7 @@ class FoundationIT {
   @ParameterizedTest
   @ValueSource(
       strings = {
-        "short_code", "destination_url", "creation_request_id", "short_url", "created_at"
+        "short_code", "destination_url", "creation_request_id", "short_url", "created_at", "destination_hash"
       })
   @Transactional
   void allCreationResultFieldsAreRequired(String column) {
@@ -139,16 +139,40 @@ class FoundationIT {
 
   @Test
   @Transactional
-  void independentCreationsCanShareTheSameDestination() {
+  void duplicateDestinationsAreRejected() {
     insertLink("Ab3dE6gH9J", REQUEST_ID);
-    insertLink("Zy9xW6vU3T", OTHER_REQUEST_ID);
+    assertThatThrownBy(() -> insertLink("Zy9xW6vU3T", OTHER_REQUEST_ID,
+        "https://example.com/Ab3dE6gH9J"))
+        .isInstanceOf(DuplicateKeyException.class);
+  }
 
-    assertThat(
-            jdbc.queryForList(
-                "SELECT short_code FROM short_links WHERE destination_url = ?",
-                String.class,
-                "https://example.com/docs"))
-        .containsExactlyInAnyOrder("Ab3dE6gH9J", "Zy9xW6vU3T");
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "UPDATE short_links SET destination_hash = decode('00', 'hex')",
+      "UPDATE short_links SET destination_url = 'https://changed.example'"
+  })
+  @Transactional
+  void fingerprintsMustMatchTheStoredDestination(String sql) {
+    insertLink("Ab3dE6gH9J", REQUEST_ID);
+    assertThatThrownBy(() -> jdbc.update(sql))
+        .isInstanceOf(DataIntegrityViolationException.class)
+        .rootCause().isInstanceOfSatisfying(SQLException.class,
+            error -> assertThat(error.getSQLState()).isEqualTo("23514"));
+  }
+
+  @Test
+  @Transactional
+  void newRowsReceiveDatabaseGeneratedInternalIds() {
+    jdbc.update("""
+        INSERT INTO short_links (short_code, destination_url, destination_hash, short_url, created_at)
+        VALUES ('DefaultId1', 'https://example.com/default',
+          sha256(convert_to('https://example.com/default', 'UTF8')),
+          'https://short.example/r/DefaultId1', CURRENT_TIMESTAMP)
+        """);
+    var identity = jdbc.queryForObject(
+        "SELECT creation_request_id FROM short_links WHERE short_code = 'DefaultId1'", UUID.class);
+    assertThat(identity).isNotNull();
+    assertThat(identity.version()).isEqualTo(4);
   }
 
   @Test
@@ -172,14 +196,19 @@ class FoundationIT {
   }
 
   private void insertLink(String code, UUID requestId) {
+    insertLink(code, requestId, "https://example.com/" + code);
+  }
+
+  private void insertLink(String code, UUID requestId, String destination) {
     jdbc.update(
         """
         INSERT INTO short_links
-          (short_code, destination_url, creation_request_id, short_url, created_at)
-        VALUES (?, ?, ?, ?, ?)
+          (short_code, destination_url, destination_hash, creation_request_id, short_url, created_at)
+        VALUES (?, ?, sha256(convert_to(?, 'UTF8')), ?, ?, ?)
         """,
         code,
-        "https://example.com/docs",
+        destination,
+        destination,
         requestId,
         "http://localhost:8080/r/" + code,
         CREATED_AT);
