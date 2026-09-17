@@ -22,13 +22,16 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
   > "$reports/osv.json" || status=1
 
 # Secret detection is entirely local, with network disabled and output fully redacted.
+# Match the host owner so report writes work without DAC-override capabilities on Linux.
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" \
   -v "$repo_root:/repo:ro" -v "$reports:/reports" \
   "$gitleaks_image" dir /repo --config=/repo/config/gitleaks-worktree.toml --redact=100 \
   --no-banner --timeout=120 --report-format=json --report-path=/reports/gitleaks-worktree.json \
   || status=1
 
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" \
   -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
   -v "$repo_root:/repo:ro" -v "$reports:/reports" \
   "$gitleaks_image" git /repo --log-opts=--all --config=/repo/.gitleaks.toml --redact=100 \

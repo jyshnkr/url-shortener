@@ -2,7 +2,7 @@
 
 A Java/Spring Boot URL shortener, built collaboratively in small reviewed increments.
 
-**Phases 1 and 2A accepted; Phase 2B redirects implemented, awaiting human review.** URL-only creation, destination reuse and following short links are covered by local tests. Expiration, analytics and API-key protection are deferred. Automated quality and security checks are now configured; see [verification](docs/testing.md). See [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
+**Phases 1 and 2A accepted; redirects, automated checks and Phase 3 performance measurement are ready for human review.** URL-only creation, destination reuse and following short links are covered by local tests. Expiration, analytics and API-key protection are deferred. See [verification](docs/testing.md), [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
 
 ## Prerequisites
 
@@ -69,12 +69,17 @@ With Docker running (Compose does not need to be running):
 
 ```sh
 ./mvnw verify                   # Formatting, tests and static bug/security analysis
+./mvnw -B -ntp -Pperformance verify # Separate local redirect performance check
 bash scripts/security-checks.sh # Dependency vulnerabilities and redacted secret scans
 ```
 
 Security scans need Bash and Docker; dependency scanning also needs network access. Reports are written under `target/security/`. The GitHub Actions workflow runs both commands on PRs, main-branch pushes, manual runs and a weekly schedule once published.
 
 Tests provision their own PostgreSQL; they do not use the development database. `./mvnw test` does **not** run integration tests; use `verify`. See [testing](docs/testing.md) for test names, commands, observed results and remaining quality gates.
+
+Local [checkout reproduction](docs/testing.md#checkout-reproduction) passed for the committed baseline and a copied snapshot of the Phase 3 changes. Hosted quality passed; the security report-permission correction is verified locally and awaits hosted CI validation. See [results](docs/testing.md#current-checks-and-results).
+
+The performance profile replaces the normal integration suite with a one-minute, ten-client check over 1,000 saved links after 15 seconds of warm-up. Ordinary verification and CI exclude this run. It requires zero errors and at least 95% of attempts within 100 ms; destination loading is excluded. Reports remain under `target/performance/` even if the target is missed. See [methodology and recorded results](docs/testing.md#redirect-performance-baseline) before interpreting this local baseline.
 
 On Windows, use `mvnw.cmd` in place of `./mvnw` and `curl.exe` if your shell aliases `curl`.
 

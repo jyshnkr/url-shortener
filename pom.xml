@@ -117,6 +117,9 @@
         <artifactId>maven-failsafe-plugin</artifactId>
         <configuration>
           <failIfNoTests>true</failIfNoTests>
+          <excludes>
+            <exclude>**/RedirectPerformanceIT.java</exclude>
+          </excludes>
         </configuration>
         <executions>
           <execution>
@@ -131,6 +134,28 @@
   </build>
 
   <profiles>
+    <profile>
+      <id>performance</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-failsafe-plugin</artifactId>
+            <configuration combine.self="override">
+              <failIfNoTests>true</failIfNoTests>
+              <!-- Retain Boot's test classpath when replacing the default exclusion. -->
+              <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+              <includes>
+                <include>**/RedirectPerformanceIT.java</include>
+              </includes>
+              <!-- Bound even an unresponsive harness or resource cleanup. -->
+              <forkedProcessTimeoutInSeconds>360</forkedProcessTimeoutInSeconds>
+              <forkedProcessExitTimeoutInSeconds>30</forkedProcessExitTimeoutInSeconds>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <id>security</id>
       <build>
