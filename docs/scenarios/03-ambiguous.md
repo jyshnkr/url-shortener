@@ -1,10 +1,11 @@
 # Scenario 3: availability versus analytics
 
-- **Status:** requirement clarified; implementation and tests pending.
-- **Unclear request:** availability is the main priority - should analytics failure also fail a redirect?
-- **Clarification:** the user chose to continue a valid redirect when recording fails.
-- **Decision:** record usage separately through a bounded queue; never wait for space, and make recording failures visible.
-- **Tradeoff:** counts may lag or miss events. Correct destinations remain mandatory; failed database lookups can still prevent redirects.
-- **Task order:** build redirects, agree counting rules and limits, add recording, then test failure isolation.
-- **Execution so far:** analytics discussion and design agreement only. Phase 2B implements redirects and safe database-failure responses; it does not implement or demonstrate analytics failure isolation.
-- **Validation planned:** check normal counts, simultaneous updates, slow/failed recording and a full queue; redirects must remain unaffected by recording failures.
+- **Status:** implemented and verified locally; human acceptance pending.
+- **Unclear request:** availability is the main priority — should analytics failure also fail a redirect?
+- **Clarification:** the user chose to continue a valid redirect when recording fails, and later pulled analytics forward from the deferred work and authorized its implementation plan.
+- **Counting decision:** record GET requests after constructing a successful 302; exclude HEAD, creation, stats and failures. Repeated requests and bots count. The last timestamp is the maximum recorded request time, not flush time or proof of a destination visit.
+- **Implementation:** a bounded queue with one batched writer and an owned one-connection pool, atomic counter updates, public stats reads and additive V3 migration. Full queues drop new events; failed batches are unconfirmed and not retried. Diagnostics expose these losses without making recording part of redirect database work.
+- **Evidence:** API checks cover zero/null, case-sensitive stats, reuse, HEAD exclusion and concurrent redirects. A controlled blocked writer fills a one-event test queue: redirects still return 302, the next event is dropped, the first batch fails, and later writes recover. A real PostgreSQL analytics-row lock times out the writer while redirects and stats reads succeed. Migration preserves populated V2 mappings; shutdown/restart preserves recorded counts. See [verification and observed performance](../testing.md#analytics-verification).
+- **Tradeoff:** counts can lag or miss events, including on process loss. The writer shares the database, so lookup failure can still prevent redirects. No unique-visitor claim, public-use protection or production availability guarantee is made.
+- **Observed result:** full regression passed 52 unit + 95 integration cases. The single load run passed both targets: 842,581 measured redirects with no errors and 100% within 100 ms; all 1,029,604 warm-up/measured analytics events persisted, with no losses or per-code mismatches. [Full results](../testing.md#analytics-enabled-performance-result).
+- **Disposition:** ready for human review; no commit or push is authorized by implementation approval.

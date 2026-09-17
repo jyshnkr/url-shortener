@@ -2,7 +2,7 @@
 
 A Java/Spring Boot URL shortener, built collaboratively in small reviewed increments.
 
-**Phases 1 and 2A accepted; redirects, automated checks and Phase 3 performance measurement are ready for human review.** URL-only creation, destination reuse and following short links are covered by local tests. Expiration, analytics and API-key protection are deferred. See [verification](docs/testing.md), [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
+**Phases 1 and 2A accepted; redirects, automated checks, performance measurement and analytics are implemented for human review.** URL-only creation, destination reuse, redirects and best-effort usage counts are covered by local tests. Expiration and API-key protection are deferred. See [verification](docs/testing.md), [the current increment](docs/scenarios/01-greenfield.md) and [engineering summary](docs/engineering-summary.md).
 
 ## Prerequisites
 
@@ -53,6 +53,14 @@ curl -L http://localhost:8080/r/RETURNED_CODE   # Let curl follow the destinatio
 
 A saved code returns `302`, the destination in `Location`, `Cache-Control: no-store`, and no body. Unknown or malformed codes return safe JSON `404`; storage failures return `503` with retry guidance. Codes are case-sensitive. The service never fetches destinations; `curl -L` or your browser does that. Input and error rules: [architecture](docs/architecture.md#redirect-contract).
 
+Read recorded usage (the count can lag behind redirects):
+
+```sh
+curl -i http://localhost:8080/api/v1/links/RETURNED_CODE/stats
+```
+
+Expect `200`, `Cache-Control: no-store`, and `code`, `redirectCount`, `lastRedirectedAt` (UTC timestamp, or `null` for a link with no recorded redirects). Only successful GET redirects count; HEAD, creation, stats reads and failed resolution do not. Repeated requests and bots count. A full queue or failed analytics write can lose counts without failing valid redirects. This is not a unique-visitor or confirmed-page-visit metric. See [analytics behavior and limits](docs/architecture.md#analytics-contract).
+
 The application and PostgreSQL bind to loopback by default. The database username `url_shortener` and password `local-development-only` are public **local demo credentials**, not production secrets. Do not expose this configuration publicly. For a different environment, Spring accepts `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`; configure the database consistently too.
 
 Stop the application with Ctrl-C, then:
@@ -77,15 +85,15 @@ Security scans need Bash and Docker; dependency scanning also needs network acce
 
 Tests provision their own PostgreSQL; they do not use the development database. `./mvnw test` does **not** run integration tests; use `verify`. See [testing](docs/testing.md) for test names, commands, observed results and remaining quality gates.
 
-Local [checkout reproduction](docs/testing.md#checkout-reproduction) passed for the committed baseline and a copied snapshot of the Phase 3 changes. Hosted quality passed; the security report-permission correction is verified locally and awaits hosted CI validation. See [results](docs/testing.md#current-checks-and-results).
+Local [checkout reproduction](docs/testing.md#checkout-reproduction) passed for the committed baseline and a copied snapshot of the Phase 3 changes. Both hosted quality and security passed at `87aa283`; the analytics changes still need their own hosted run after an authorized commit/push. See [results](docs/testing.md#current-checks-and-results).
 
-The performance profile replaces the normal integration suite with a one-minute, ten-client check over 1,000 saved links after 15 seconds of warm-up. Ordinary verification and CI exclude this run. It requires zero errors and at least 95% of attempts within 100 ms; destination loading is excluded. Reports remain under `target/performance/` even if the target is missed. See [methodology and recorded results](docs/testing.md#redirect-performance-baseline) before interpreting this local baseline.
+The performance profile replaces the normal integration suite with a one-minute, ten-client check over 1,000 saved links after 15 seconds of warm-up. Ordinary verification and CI exclude this run. It requires zero errors and at least 95% of attempts within 100 ms; destination loading is excluded. It also checks persisted analytics for all warm-up and measured redirects after a separate ten-second drain, requiring no dropped or unconfirmed events. Reports remain under `target/performance/` even if either target is missed. See [methodology and recorded results](docs/testing.md#redirect-performance-baseline) before interpreting this local baseline.
 
 On Windows, use `mvnw.cmd` in place of `./mvnw` and `curl.exe` if your shell aliases `curl`.
 
 ## Layout
 
-- `src/main/java`: Spring Boot entry point and the `links` creation and resolution module.
+- `src/main/java`: Spring Boot entry point and the `links` creation, resolution and analytics module.
 - `src/main/resources/db/migration`: Flyway schema migrations.
 - `src/test/java`: validation unit tests and isolated PostgreSQL/API integration tests.
 - `docs/`: the documentation below; each file owns one topic.

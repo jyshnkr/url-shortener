@@ -37,9 +37,9 @@ An optional cutoff fixed when a short link is created; the link is no longer eli
 _Avoid_: Deletion time, retention deadline
 
 **Redirect count**:
-The number of recorded requests accepted for redirection through a particular short link. It can be incomplete during analytics-recording failures and does not represent unique people or confirmed destination-page visits.
+The number of recorded GET requests accepted for redirection through a particular short link, after its 302 response has been constructed. HEAD, creation, stats reads and failed resolution are excluded; repeat requests, retries and bots count. It can be incomplete during analytics-recording failures and does not represent unique people or confirmed destination-page visits.
 _Avoid_: Unique visitors, page views, human clicks
 
 **Last redirected at**:
-The time of the most recent recorded request accepted for redirection through a particular short link. It can lag during analytics-recording failures and does not establish when anyone last viewed the destination page.
+The latest UTC request-recording timestamp among recorded GET redirects for a short link, not the database flush time. It is null until a redirect is recorded. It can lag during analytics-recording failures and does not establish when anyone last viewed the destination page.
 _Avoid_: Last destination visit, last human visit

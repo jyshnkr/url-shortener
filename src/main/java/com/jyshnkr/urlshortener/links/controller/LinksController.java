@@ -1,10 +1,14 @@
 package com.jyshnkr.urlshortener.links.controller;
 
+import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder;
 import com.jyshnkr.urlshortener.links.exception.LinkFailure;
 import com.jyshnkr.urlshortener.links.model.CreateLinkRequest;
 import com.jyshnkr.urlshortener.links.model.CreateLinkResponse;
+import com.jyshnkr.urlshortener.links.model.LinkStats;
+import com.jyshnkr.urlshortener.links.service.LinkAnalyticsService;
 import com.jyshnkr.urlshortener.links.service.LinkCreationService;
 import com.jyshnkr.urlshortener.links.service.LinkResolutionService;
+import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import org.springframework.http.HttpHeaders;
@@ -22,19 +26,39 @@ class LinksController {
 
   private final LinkCreationService links;
   private final LinkResolutionService resolution;
+  private final LinkAnalyticsService analytics;
+  private final RedirectRecorder recorder;
 
-  LinksController(LinkCreationService links, LinkResolutionService resolution) {
+  LinksController(
+      LinkCreationService links,
+      LinkResolutionService resolution,
+      LinkAnalyticsService analytics,
+      RedirectRecorder recorder) {
     this.links = links;
     this.resolution = resolution;
+    this.analytics = analytics;
+    this.recorder = recorder;
+  }
+
+  @GetMapping("/api/v1/links/{code}/stats")
+  ResponseEntity<LinkStats> stats(@PathVariable String code) {
+    return ResponseEntity.ok()
+        .header(HttpHeaders.CACHE_CONTROL, "no-store")
+        .body(analytics.stats(code));
   }
 
   @GetMapping("/r/{code}")
-  ResponseEntity<Void> redirect(@PathVariable String code) {
+  ResponseEntity<Void> redirect(@PathVariable String code, HttpServletRequest request) {
     var link = resolution.resolve(code);
-    return ResponseEntity.status(HttpStatus.FOUND)
-        .header(HttpHeaders.LOCATION, destinationHeader(link.destinationUrl()))
-        .header(HttpHeaders.CACHE_CONTROL, "no-store")
-        .build();
+    ResponseEntity<Void> response =
+        ResponseEntity.status(HttpStatus.FOUND)
+            .header(HttpHeaders.LOCATION, destinationHeader(link.destinationUrl()))
+            .header(HttpHeaders.CACHE_CONTROL, "no-store")
+            .build();
+    if ("GET".equals(request.getMethod())) {
+      recorder.record(code);
+    }
+    return response;
   }
 
   @PostMapping("/api/v1/links")

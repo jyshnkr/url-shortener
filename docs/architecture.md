@@ -1,20 +1,27 @@
 # Architecture
 
-- **Built:** startup, health check, versioned table setup and link creation with destination reuse, and following short links.
-- **Deferred:** expiration, analytics and API-key protection are not implemented; deployment and performance measurement are also deferred from the current quality increment.
+- **Built:** startup, health check, versioned table setup and link creation with destination reuse, following short links, and best-effort redirect analytics.
+- **Deferred:** expiration, API-key protection and deployment. Local performance evidence is recorded in [testing](testing.md#redirect-performance-baseline).
 
 ```mermaid
 flowchart LR
     C["Caller"] -->|"POST /api/v1/links"| H
     C -->|"GET /r/{code} (also HEAD)"| H
+    C -->|"GET /api/v1/links/{code}/stats"| H
     subgraph APP["Spring Boot application"]
         H["LinksController"] --> L["LinkCreationService: validate, reuse, allocate"]
         L --> S["LinkStore: read / insert"]
         H --> R["LinkResolutionService: validate code, resolve"]
         R -->|"Read by primary key"| S
+        H --> A["LinkAnalyticsService: read stats"]
+        A --> AS["LinkAnalyticsStore: stats / atomic increments"]
+        H -->|"Successful GET only: offer"| Q["RedirectRecorder: bounded queue"]
+        Q --> W["One batch writer, dedicated connection"]
+        W --> AS
         F["Flyway"]
     end
     S <--> DB[(PostgreSQL)]
+    AS <--> DB
     F -->|"Set up tables at startup"| DB
     H -->|"201 created / 200 reused / 302 redirect, or safe error"| C
 ```
@@ -43,6 +50,16 @@ flowchart LR
 - The controller preserves ASCII and existing percent escapes, and percent-encodes only non-ASCII UTF-8 bytes. It avoids `URI.toASCIIString()` to preserve decomposed Unicode. Stored text and creation/reuse responses remain unchanged.
 - Tomcat's response-header allowance is 32 KB: an accepted 2,048-code-unit destination can expand beyond 18 KB after encoding. The long Unicode HTTP test covers this; request limits and destination validation are unchanged.
 
+## Analytics contract
+
+- `GET /api/v1/links/{code}/stats` returns `code`, `redirectCount` and `lastRedirectedAt`, with `Cache-Control: no-store`. A saved link without an analytics row returns zero/null. The timestamp is UTC; malformed/unknown codes return safe 404, and unavailable stats storage returns safe 503. Codes remain case-sensitive.
+- Only GET redirects count, after successful resolution and construction of the 302 response. HEAD, creation/reuse, stats reads and errors do not. Bots, retries and repeated requests count; receipt by the browser and destination visits are not observable here. Reuse retains the original link's stats.
+- `RedirectRecorder` offers an event to a 10,000-event queue without waiting for space or performing database work. One worker combines at most 1,000 events, waiting at most 250 ms to form a batch. Backlogs can make visibility lag longer. Each atomic upsert adds counts and takes the maximum recorded timestamp, with keys sorted to give concurrent writers consistent lock order.
+- `JdbcAnalyticsWriter` owns a lazy Hikari pool (maximum one connection, zero minimum idle), copying the primary datasource's resolved URL, credentials, driver properties and connection/validation timeouts. It is not another Spring DataSource bean, so Boot still configures the normal pool. SQL retains its three-second deadline. Separate pools isolate connection exhaustion, but both still share PostgreSQL resources; database failure can stop link resolution.
+- A full queue drops the new event. Failed batches are marked **unconfirmed**, because a missing acknowledgement can hide a committed write; they are never retried. Counts are eventually consistent and best effort, not an audit ledger. Previously served traffic cannot be reconstructed.
+- Micrometer exposes internal `shortener.analytics.events` counters tagged by outcome (`submitted`, `confirmed`, `queue_full`, `shutdown`, `unconfirmed`), plus `shortener.analytics.queue.depth` and `shortener.analytics.in.flight` gauges. These are process-local and reset at restart. Aggregate warnings are rate-limited to one per ten seconds, without codes, destinations or raw database errors. Actuator's HTTP exposure remains health-only; this increment adds no public metrics endpoint or exporter.
+- Shutdown stops admission, allows five seconds to drain, then discards queued work and closes the writer/pool, with a total fifteen-second recorder deadline. A stuck driver may finish daemon cleanup later; counters identify discarded/unconfirmed events. Abrupt process loss can lose queued events. Successfully persisted totals survive restart. No per-request events, IP addresses, user agents or referrers are stored.
+
 ## Responsibilities
 
 One `links` module uses constructor injection and these packages:
@@ -51,9 +68,10 @@ One `links` module uses constructor injection and these packages:
 | --- | --- |
 | `controller` | HTTP input, status/headers, destination header encoding and safe error translation |
 | `model` | Separate request, response, saved link and creation outcome records |
-| `service` | Creation/resolution validation, lookup and bounded creation retries |
+| `service` | Creation, resolution and stats validation/lookup; bounded creation retries |
 | `dao` | SQL, row mapping, code lookup, fingerprint lookup/full comparison and storage-failure translation |
-| `validation` | Destination URL rules |
+| `validation` | Destination URL and short-code rules |
+| `analytics` | Bounded admission, batch recording, diagnostics and owned writer lifecycle |
 | `generator` | Secure random short codes; a supplier seam permits forced test collisions |
 | `exception` | `LinkFailure` reasons (invalid input, not found, unavailable) without HTTP or SQL details |
 | `config` | Validated base URL and dependency wiring |
@@ -66,9 +84,7 @@ The fingerprint is required, unique and checked against the stored destination. 
 
 Flyway runs V2 transactionally, with a three-second lock wait and thirty-second statement limit. Duplicate destinations or fingerprint conflicts abort and roll back the migration without deleting or merging mappings. A database containing such rows needs an explicit data-resolution decision before upgrade. Large backfills may exceed the statement limit; migration timing has only been exercised on disposable test data.
 
-## Agreed later behavior, not built
-
-- Analytics is deferred until after submission. The intended bounded queue/worker keeps recording outside the redirect path; counts may lag or lose unrecorded events.
+[V3](../src/main/resources/db/migration/V3__create_link_analytics.sql) adds `link_analytics` without altering V1/V2 or existing mappings. Its case-sensitive short-code primary key references `short_links`; counts must be positive BIGINTs and timestamps non-null TIMESTAMPTZs. Rows are created lazily on the first recorded batch, so old links initially report zero/null. V3 bounds lock waits to three seconds and statement execution to thirty seconds. Populated V2 migration, constraints and preserved reuse are checked against disposable PostgreSQL.
 
 ## Choices, tradeoffs and risks
 

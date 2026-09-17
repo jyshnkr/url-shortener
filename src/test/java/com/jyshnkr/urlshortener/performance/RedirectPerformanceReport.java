@@ -1,9 +1,11 @@
 package com.jyshnkr.urlshortener.performance;
 
+import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder.Diagnostics;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,6 +46,52 @@ final class RedirectPerformanceReport {
       double finalDrainSeconds,
       double completedRequestsPerSecond,
       boolean passed) {}
+
+  record Analytics(
+      long expectedRedirects,
+      long persistedRedirects,
+      long mismatchedLinks,
+      double drainSeconds,
+      boolean drained,
+      Diagnostics diagnostics,
+      String readFailure,
+      boolean passed) {}
+
+  static Analytics summarizeAnalytics(
+      Map<String, Long> expected,
+      Map<String, Long> persisted,
+      double drainSeconds,
+      boolean drained,
+      Diagnostics diagnostics,
+      String readFailure) {
+    long expectedTotal = expected.values().stream().mapToLong(Long::longValue).sum();
+    long persistedTotal = persisted.values().stream().mapToLong(Long::longValue).sum();
+    long mismatches =
+        expected.entrySet().stream()
+            .filter(entry -> !entry.getValue().equals(persisted.getOrDefault(entry.getKey(), 0L)))
+            .count();
+    return new Analytics(
+        expectedTotal,
+        persistedTotal,
+        mismatches,
+        drainSeconds,
+        drained,
+        diagnostics,
+        readFailure,
+        expectedTotal > 0
+            && drained
+            && readFailure.isEmpty()
+            && mismatches == 0
+            && expectedTotal == persistedTotal
+            && diagnostics.submitted() == expectedTotal
+            && diagnostics.confirmedWrites() == expectedTotal
+            && diagnostics.queueFullDrops() == 0
+            && diagnostics.shutdownDrops() == 0
+            && diagnostics.unconfirmedWrites() == 0
+            && diagnostics.queued() == 0
+            && diagnostics.inFlight() == 0
+            && diagnostics.workerAlive());
+  }
 
   static Summary summarize(List<Attempt> attempts, long measurementNanos) {
     if (measurementNanos <= 0) {
@@ -89,6 +137,16 @@ final class RedirectPerformanceReport {
   static void write(
       Path directory, Map<String, Object> metadata, List<Attempt> attempts, Summary summary)
       throws IOException {
+    write(directory, metadata, attempts, summary, null);
+  }
+
+  static void write(
+      Path directory,
+      Map<String, Object> metadata,
+      List<Attempt> attempts,
+      Summary summary,
+      Analytics analytics)
+      throws IOException {
     Files.createDirectories(directory);
     try (var csv = Files.newBufferedWriter(directory.resolve("requests.csv"))) {
       csv.write("client,link,start_offset_ns,latency_ns,status,outcome,detail\n");
@@ -111,12 +169,16 @@ final class RedirectPerformanceReport {
                 + "\"\n");
       }
     }
+    var report = new LinkedHashMap<String, Object>();
+    report.put("metadata", metadata);
+    report.put("summary", summary);
+    if (analytics != null) {
+      report.put("analytics", analytics);
+    }
+    report.put("passed", summary.passed() && (analytics == null || analytics.passed()));
     Files.writeString(
         directory.resolve("report.json"),
-        JsonMapper.builder()
-                .build()
-                .writerWithDefaultPrettyPrinter()
-                .writeValueAsString(Map.of("metadata", metadata, "summary", summary))
+        JsonMapper.builder().build().writerWithDefaultPrettyPrinter().writeValueAsString(report)
             + "\n");
     String console =
         String.format(
@@ -138,6 +200,22 @@ final class RedirectPerformanceReport {
             summary.measurementSeconds(),
             summary.finalDrainSeconds(),
             directory);
+    if (analytics != null) {
+      console +=
+          String.format(
+              Locale.ROOT,
+              "Analytics %s: expected=%d, persisted=%d, mismatchedLinks=%d, drain=%.6f s, drained=%s;%n"
+                  + "diagnostics=%s, readFailure=%s; overall=%s%n",
+              analytics.passed() ? "PASS" : "FAIL",
+              analytics.expectedRedirects(),
+              analytics.persistedRedirects(),
+              analytics.mismatchedLinks(),
+              analytics.drainSeconds(),
+              analytics.drained(),
+              analytics.diagnostics(),
+              analytics.readFailure(),
+              report.get("passed"));
+    }
     Files.writeString(directory.resolve("summary.txt"), console);
     System.out.print(console);
   }

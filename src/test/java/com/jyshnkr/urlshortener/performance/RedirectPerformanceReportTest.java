@@ -2,6 +2,7 @@ package com.jyshnkr.urlshortener.performance;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder.Diagnostics;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Attempt;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Outcome;
 import java.nio.file.Files;
@@ -14,6 +15,63 @@ import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.json.JsonMapper;
 
 class RedirectPerformanceReportTest {
+
+  @Test
+  void analyticsRequiresExactPerCodeCountsAndNoLossesOrPendingWrites() {
+    var expected = Map.of("one", 2L, "two", 3L);
+    var good = new Diagnostics(5, 5, 0, 0, 0, 0, 0, true);
+    assertThat(
+            RedirectPerformanceReport.summarizeAnalytics(expected, expected, 0.1, true, good, "")
+                .passed())
+        .isTrue();
+    assertThat(
+            RedirectPerformanceReport.summarizeAnalytics(
+                    expected, Map.of("one", 3L, "two", 2L), 0.1, true, good, "")
+                .passed())
+        .isFalse();
+    assertThat(
+            RedirectPerformanceReport.summarizeAnalytics(expected, expected, 10, false, good, "")
+                .passed())
+        .isFalse();
+    assertThat(
+            RedirectPerformanceReport.summarizeAnalytics(
+                    expected, Map.of(), 0.1, true, good, "DataAccessException")
+                .passed())
+        .isFalse();
+    for (var diagnostics :
+        List.of(
+            new Diagnostics(6, 5, 1, 0, 0, 0, 0, true),
+            new Diagnostics(6, 5, 0, 1, 0, 0, 0, true),
+            new Diagnostics(6, 5, 0, 0, 1, 0, 0, true),
+            new Diagnostics(5, 4, 0, 0, 0, 1, 0, true),
+            new Diagnostics(5, 4, 0, 0, 0, 0, 1, true),
+            new Diagnostics(5, 5, 0, 0, 0, 0, 0, false))) {
+      assertThat(
+              RedirectPerformanceReport.summarizeAnalytics(
+                      expected, expected, 0.1, true, diagnostics, "")
+                  .passed())
+          .isFalse();
+    }
+  }
+
+  @Test
+  void failedAnalyticsMakesTheOverallReportFailEvenWhenRedirectsPass(@TempDir Path directory)
+      throws Exception {
+    var attempts = List.of(valid(1));
+    var analytics =
+        RedirectPerformanceReport.summarizeAnalytics(
+            Map.of("one", 1L), Map.of(), 10, false, new Diagnostics(1, 0, 0, 0, 1, 0, 0, true), "");
+    RedirectPerformanceReport.write(directory, Map.of(), attempts, summarize(attempts), analytics);
+    var report =
+        JsonMapper.builder().build().readTree(Files.readString(directory.resolve("report.json")));
+    assertThat(report.get("passed").booleanValue()).isFalse();
+    assertThat(report.get("summary").get("passed").booleanValue()).isTrue();
+    assertThat(report.get("analytics").get("expectedRedirects").longValue()).isEqualTo(1);
+    assertThat(report.get("analytics").get("diagnostics").get("unconfirmedWrites").longValue())
+        .isEqualTo(1);
+    assertThat(Files.readString(directory.resolve("summary.txt")))
+        .contains("Analytics FAIL", "overall=false");
+  }
 
   @Test
   void reportsRetainFailedSamplesAndMachineReadableSummary(@TempDir Path directory)

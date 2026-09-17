@@ -3,6 +3,7 @@ package com.jyshnkr.urlshortener.links.service;
 import com.jyshnkr.urlshortener.links.dao.LinkStore;
 import com.jyshnkr.urlshortener.links.exception.LinkFailure;
 import com.jyshnkr.urlshortener.links.model.Link;
+import com.jyshnkr.urlshortener.links.validation.ShortCodeValidator;
 
 public class LinkResolutionService {
 
@@ -13,9 +14,7 @@ public class LinkResolutionService {
   }
 
   public Link resolve(String code) {
-    if (code == null || !code.matches("[A-Za-z0-9]{10}")) {
-      throw notFound();
-    }
+    ShortCodeValidator.requireValid(code);
     return store.findByCode(code).orElseThrow(LinkResolutionService::notFound);
   }
 

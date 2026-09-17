@@ -3,6 +3,8 @@ package com.jyshnkr.urlshortener.performance;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.jyshnkr.urlshortener.UrlShortenerApplication;
+import com.jyshnkr.urlshortener.links.analytics.RecordingSettings;
+import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Attempt;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Outcome;
 import java.net.URI;
@@ -17,6 +19,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -49,7 +53,7 @@ class RedirectPerformanceIT {
   private static final Duration WARM_UP = Duration.ofSeconds(15);
   private static final Duration MEASUREMENT = Duration.ofSeconds(60);
 
-  private record SavedLink(HttpRequest request, String destination) {}
+  private record SavedLink(HttpRequest request, String destination, String code) {}
 
   private record Phase(Instant timestamp, List<Attempt> attempts) {}
 
@@ -92,6 +96,13 @@ class RedirectPerformanceIT {
           assertThat(warmUp.attempts()).isNotEmpty().allMatch(a -> a.outcome() == Outcome.VALID);
           System.out.println("Warm-up complete; measuring ten clients for 60 seconds.");
           var measured = runPhase(workers, clients, links, MEASUREMENT);
+          var analytics =
+              verifyAnalytics(
+                  application.getBean(RedirectRecorder.class),
+                  application.getBean(DataSource.class),
+                  links,
+                  warmUp,
+                  measured);
           metadata.put("measurementStartedAt", measured.timestamp().toString());
           var summary =
               RedirectPerformanceReport.summarize(measured.attempts(), MEASUREMENT.toNanos());
@@ -102,8 +113,10 @@ class RedirectPerformanceIT {
                   + "-"
                   + UUID.randomUUID();
           var directory = Path.of("target", "performance", runName);
-          RedirectPerformanceReport.write(directory, metadata, measured.attempts(), summary);
+          RedirectPerformanceReport.write(
+              directory, metadata, measured.attempts(), summary, analytics);
           assertThat(summary.passed()).as("Local redirect target; see %s", directory).isTrue();
+          assertThat(analytics.passed()).as("Analytics completeness; see %s", directory).isTrue();
         } finally {
           // Initiate every shutdown before waiting, so one stalled client cannot block the others.
           workers.shutdownNow();
@@ -151,9 +164,61 @@ class RedirectPerformanceIT {
                   .timeout(REQUEST_TIMEOUT)
                   .GET()
                   .build(),
-              destination));
+              destination,
+              code));
     }
     return List.copyOf(links);
+  }
+
+  private RedirectPerformanceReport.Analytics verifyAnalytics(
+      RedirectRecorder recorder,
+      DataSource source,
+      List<SavedLink> links,
+      Phase warmUp,
+      Phase measured)
+      throws InterruptedException {
+    var expected = new HashMap<String, Long>();
+    links.forEach(link -> expected.put(link.code(), 0L));
+    for (var phase : List.of(warmUp, measured)) {
+      for (var attempt : phase.attempts()) {
+        if (attempt.outcome() == Outcome.VALID) {
+          expected.merge(links.get(attempt.link()).code(), 1L, Long::sum);
+        }
+      }
+    }
+    long total = expected.values().stream().mapToLong(Long::longValue).sum();
+    long before = System.nanoTime();
+    long deadline = before + Duration.ofSeconds(10).toNanos();
+    var diagnostics = recorder.diagnostics();
+    while (System.nanoTime() < deadline
+        && (diagnostics.confirmedWrites() < total
+            || diagnostics.queued() != 0
+            || diagnostics.inFlight() != 0)) {
+      TimeUnit.MILLISECONDS.sleep(10);
+      diagnostics = recorder.diagnostics();
+    }
+    double drainSeconds = (System.nanoTime() - before) / 1_000_000_000.0;
+    boolean drained =
+        diagnostics.confirmedWrites() == total
+            && diagnostics.queued() == 0
+            && diagnostics.inFlight() == 0
+            && System.nanoTime() <= deadline;
+    var persisted = new HashMap<String, Long>();
+    String failure = "";
+    try {
+      // Verification reads happen outside HTTP measurement and after the bounded analytics drain.
+      var jdbc = new JdbcTemplate(source);
+      jdbc.setQueryTimeout(3);
+      jdbc.query(
+          "SELECT short_code, redirect_count FROM link_analytics",
+          row -> {
+            persisted.put(row.getString("short_code"), row.getLong("redirect_count"));
+          });
+    } catch (RuntimeException readFailure) {
+      failure = readFailure.getClass().getSimpleName();
+    }
+    return RedirectPerformanceReport.summarizeAnalytics(
+        expected, persisted, drainSeconds, drained, diagnostics, failure);
   }
 
   private Phase runPhase(
@@ -279,6 +344,11 @@ class RedirectPerformanceIT {
     metadata.put("jvm", System.getProperty("java.vm.name"));
     metadata.put("javaVersion", System.getProperty("java.runtime.version"));
     metadata.put("javaVendor", System.getProperty("java.vendor"));
+    metadata.put("analyticsSettings", RecordingSettings.defaults());
+    metadata.put("analyticsDrainLimitSeconds", 10);
+    metadata.put(
+        "analyticsExpectedScope",
+        "All valid GET redirects in warm-up and measurement, checked per saved code");
     metadata.put(
         "workload",
         Map.of(

@@ -3,7 +3,7 @@
   <!-- Inventory markers, not vulnerabilities: these are the intended public HTTP handlers. -->
   <Match>
     <Class name="com.jyshnkr.urlshortener.links.controller.LinksController"/>
-    <Method name="~create|redirect"/>
+    <Method name="~create|redirect|stats"/>
     <Bug pattern="SPRING_ENDPOINT"/>
   </Match>
   <!-- URI parsing restricts schemes to ASCII before these case-insensitive HTTP(S) checks.
@@ -24,6 +24,13 @@
     <Class name="~com\.jyshnkr\.urlshortener\.links\.service\.Link(Creation|Resolution)Service"/>
     <Method name="&lt;init&gt;"/>
     <Field name="store"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <!-- Constructor-injected storage boundary; recorder owns and closes the writer. -->
+  <Match>
+    <Class name="com.jyshnkr.urlshortener.links.analytics.RedirectRecorder"/>
+    <Method name="&lt;init&gt;"/>
+    <Field name="writer"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
 </FindBugsFilter>
