@@ -1,0 +1,5 @@
+* text=auto
+/mvnw text eol=lf
+/mvnw.cmd text eol=crlf
+*.java text eol=lf
+*.sql text eol=lf
