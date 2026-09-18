@@ -16,7 +16,7 @@ An ambiguous requirement leaves room for different interpretations. These scenar
 | Decide whether an uncertain write should be retried. | Chose not to retry automatically because the original write might already have succeeded, causing a duplicate count. Reported those events as unconfirmed. | Simulated a failed recording write. Confirmed that it was reported without an automatic retry and that later recording recovered. |
 | Define the limits of the availability promise. | Kept destination lookup essential: the service must know where to redirect. If that lookup fails, it returns a clear error rather than an incorrect destination. | Stopped or stalled the test database. Confirmed that requests returned clear errors within the test deadline. |
 
-**Observed results:** In one controlled failure test, all four redirects succeeded. Two events were recorded, one was dropped because the queue was full, and one remained unconfirmed after a recording failure. This demonstrated the agreed tradeoff. See [analytics verification](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#analytics-verification).
+**Observed results:** In one controlled failure test, all four redirects succeeded. Two events were recorded, one was dropped because the queue was full, and one remained unconfirmed after a recording failure. This demonstrated the agreed tradeoff. See [failure-handling behavior](../architecture.md#failures-and-shutdown).
 
 **Limitations:** Statistics can lag or miss activity and do not represent unique visitors. The latest recorded time refers to the redirect request, not when the background process saved it. Separating recording from redirection does not guarantee availability when the database needed for destination lookup is unavailable.
 
@@ -54,7 +54,7 @@ An ambiguous requirement leaves room for different interpretations. These scenar
 | Set boundaries for unusual or lengthy addresses. | Applied a length limit and supported valid international characters while rejecting malformed text. | Tested addresses at the length boundary, overly long addresses, international characters and malformed input. |
 | Decide whether validation should rewrite the address. | Preserved accepted destination text without trimming or normalizing it. | Compared submitted and saved addresses, including query details and international characters. Checked that different exact destination strings remained distinct. |
 
-**Observed results:** Accepted addresses were preserved, invalid input was rejected, and creation worked without checking whether the destination website was online. See [creation checks](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#current-checks-and-results) and [address rules](../architecture.md#creation-contract).
+**Observed results:** Accepted addresses were preserved, invalid input was rejected, and creation worked without checking whether the destination website was online. See [testing approach](../testing.md#testing-approach) and [address rules](../architecture.md#creation-contract).
 
 **Limitations:** Acceptance does not prove that a website exists, is available, is safe or will remain unchanged.
 

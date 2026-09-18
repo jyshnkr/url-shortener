@@ -14,7 +14,7 @@ Brownfield means changing an existing system. These scenarios cover a change to 
 | Preserve links already stored in the database. | Added a database update that retains existing link details. If conflicting saved destinations prevent a safe update, it stops without merging or deleting records. | Updated a populated test database and compared the saved records before and after. Introduced conflicting data and confirmed that the update rolled back safely. |
 | Keep existing behavior working after the change. | Retained destination validation, short-code protection and clear storage errors. Saved links remain reusable after restart. | Rechecked invalid input, long addresses, international characters, code collisions and database failures. Restarted the application and confirmed that existing links were still reused. |
 
-**Observed results:** Creation, reuse, simultaneous-request, database-update and restart checks passed. See [recorded verification](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#current-checks-and-results).
+**Observed results:** Creation, reuse, simultaneous-request, database-update and restart checks passed. See [testing commands](../testing.md#commands).
 
 **Limitations:** Destinations are compared exactly. Addresses that look equivalent but have different text are treated separately. Existing conflicting data requires a decision before the database update can proceed.
 
@@ -32,7 +32,7 @@ Brownfield means changing an existing system. These scenarios cover a change to 
 | Give short-code generation its own responsibility. | Separated random code generation from the decision to save or retry a link. Tests can supply chosen codes to exercise collisions reliably. | Forced duplicate codes and checked successful recovery, the retry limit and protection of existing links. |
 | Make configuration and connections between parts clear. | Gathered configuration and component setup in one place. The creation service receives the storage, settings and code generator it needs. | Checked application startup, invalid configuration and creation using the configured short-link address. |
 
-**Observed results:** The revised creation flow passed its behavior checks. Separate code reviews checked the organization and found no remaining actionable issues. See [recorded verification and reviews](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#current-checks-and-results).
+**Observed results:** The revised creation flow passed its behavior checks. Separate code reviews checked the organization and found no remaining actionable issues. See [testing commands](../testing.md#commands).
 
 **Limitations:** Passing behavior tests supports correctness; it does not prove that future changes will always be easy. The structure still needs to be maintained as features grow.
 

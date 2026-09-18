@@ -14,7 +14,7 @@ Greenfield means building a new product capability. These scenarios cover creati
 | Keep saved links working after a restart. | Stored links in the database so they remain available when the application restarts. | Created links, restarted the application and confirmed that the same links still returned the correct destinations. |
 | Handle missing links and database problems clearly. | Added understandable errors for unknown codes and unavailable storage. Limited database waiting times and kept internal details out of error responses. | Tested unknown codes, stopped the test database and simulated an unresponsive connection. Confirmed that requests returned the expected errors within the test deadline. |
 
-**Observed results:** In the recorded local test, all 842,581 redirects completed correctly within 100 milliseconds, with no request errors. The workload used 1,000 saved links and ten clients for one minute after warm-up. See [service checks](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#current-checks-and-results) and [measured results](../measurements-and-results.md#performance-results).
+**Observed results:** In the recorded local test, all 842,581 redirects completed correctly within 100 milliseconds, with no request errors. The workload used 1,000 saved links and ten clients for one minute after warm-up. See [testing approach](../testing.md#testing-approach) and [measured results](../measurements-and-results.md#performance-results).
 
 **Limitations:** These checks measure the shortener's response, not whether the destination page loaded. The performance result describes the selected local workload, not production capacity.
 
@@ -32,7 +32,7 @@ Greenfield means building a new product capability. These scenarios cover creati
 | Keep counts correct when requests arrive together. | Made count updates add together without overwriting each other. Kept the latest recorded request time even when events arrived out of order. | Sent simultaneous requests and submitted older events after newer ones. Confirmed that counts matched and the latest recorded time did not move backward. |
 | Preserve saved links and statistics through database changes and restarts. | Added separate usage storage while retaining existing links. Recorded totals remain in the database after the application stops. | Updated a populated test database and restarted the application. Confirmed that existing links and saved counts remained available. |
 
-**Observed results:** The local load check saved all 1,029,604 expected events from warm-up and measurement. Every link's count matched, with no dropped or unconfirmed events in that run. See [analytics checks](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#analytics-verification) and [measured results](../measurements-and-results.md#performance-results).
+**Observed results:** The local load check saved all 1,029,604 expected events from warm-up and measurement. Every link's count matched, with no dropped or unconfirmed events in that run. See [integration-test commands](../testing.md#selected-integration-tests) and [measured results](../measurements-and-results.md#performance-results).
 
 **Limitations:** Counts may arrive late or miss activity during overload, recording failures or abrupt shutdown. They do not represent unique people or prove that a destination page was viewed. Database problems that prevent looking up the destination can still stop redirects.
 
