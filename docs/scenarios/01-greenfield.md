@@ -1,28 +1,41 @@
-# Scenario 1: greenfield URL shortener
+# Greenfield scenarios
 
-- **Status:** Phase 1 foundation accepted on September 17, 2026; Phase 2A creation accepted; Phase 2B redirects and Phase 3 performance measurement implemented, awaiting human review. Full service unfinished.
-- **Goal:** create or reuse short links and redirect visitors to fixed destinations. The initial request-ID design was revised to URL-only creation; see [brownfield evidence](02-brownfield.md).
-- **Constraints:** easy local setup, one application/database, small reviewed changes and no work beyond the agreed increment.
+Greenfield means building a new product capability. These scenarios cover creating and following short links, and viewing their recorded usage.
 
-## Task sequence
+## 1. Create and follow short links
 
-1. Establish startup, table setup and isolated tests - Phase 1 complete and accepted.
-2. Implement the approved create-only contract and validation checks — accepted.
-3. Add redirection after a working creation baseline — implemented, pending human review.
-4. Measure the selected local redirect workload — Phase 3, with [methodology and results](../testing.md#redirect-performance-baseline).
-5. Verify local checkout reproduction — committed baseline and copied Phase 3 snapshot passed; [evidence and limits](../testing.md#checkout-reproduction).
-6. Implement the newly authorized analytics increment and verify failure isolation; see [scenario 3](03-ambiguous.md).
-7. Complete final delivery review and, after separate authorization, verify the committed result in hosted CI.
+**Goal:** Let someone create a short link and use it to reach the intended destination.
 
-## Execution and validation
+| Decomposition — what needed to be solved | Execution — what we built | Validation — how we checked it |
+| --- | --- | --- |
+| Accept a usable destination address. | Added checks for supported web addresses, missing information, length limits and invalid characters. The service checks the address without contacting the website. | Tested valid and invalid addresses, including long addresses and international characters. Confirmed that accepted addresses were saved without changing their text. |
+| Create a short link without replacing an existing one. | Generated random short codes and saved each code with its destination. If a code was already taken, the service tried another within a fixed limit. | Deliberately generated duplicate codes. Checked that creation recovered when possible, returned a clear error when attempts ran out, and never overwrote an existing link. |
+| Direct visitors to the correct destination. | Added a lookup that finds the saved destination and tells the browser where to go. Uppercase and lowercase codes remain distinct. | Created links and checked their redirect destinations. Tested repeated requests, simultaneous requests and codes that differ only by letter case. |
+| Keep saved links working after a restart. | Stored links in the database so they remain available when the application restarts. | Created links, restarted the application and confirmed that the same links still returned the correct destinations. |
+| Handle missing links and database problems clearly. | Added understandable errors for unknown codes and unavailable storage. Limited database waiting times and kept internal details out of error responses. | Tested unknown codes, stopped the test database and simulated an unresponsive connection. Confirmed that requests returned the expected errors within the test deadline. |
 
-- **AI work:** built the foundation, then creation in test-first slices: first success, replay/conflict, concurrent writes, code collisions and validation; added restart/outage checks. Phase 2B adds code lookup, destination header encoding, HEAD and safe failure behavior in the existing module.
-- **Human decisions:** approved the foundation, then the create-only acceptance checks, URL rules, error format, five-attempt limit and public testing boundaries. Accepted Phase 2A with “looks good,” then authorized the supplied Phase 2B plan.
-- **Result:** startup, constraints, creation and redirect checks passed in the final clean build; see [testing](../testing.md#current-checks-and-results).
-- **Phase 3 scope:** the user authorized the supplied performance plan: 1,000 saved links, ten persistent clients, 15 seconds of warm-up and one 60-second measurement. Codex added a separate Maven profile, report calculations and request-level evidence; the app, schema, runtime dependencies and CI were preserved. Target: zero errors and at least 95% within 100 ms, excluding destination loading. See [the observed run](../testing.md#observed-run).
-- **Phase 3 result:** the single valid measured run passed with 870,093 valid redirects, no errors/timeouts and 100% within 100 ms. An earlier invocation failed before application startup due to a test-classpath override; its evidence was retained and the harness corrected before measuring. The final regression gate passed 44 unit + 81 integration cases. No application tuning or repeated measurement to seek a pass.
-- **Reproduction result:** a clean local clone of `9ba8b54` passed 37 unit + 81 integration cases. After copying and hash-checking the nine pending Phase 3 files, a fresh build passed 44 unit + 81 integration cases. Both retained formatting/static-analysis gates. At that check, Phase 3 was uncommitted and hosted CI was unverified. Both hosted jobs later passed at `87aa283`; new-machine setup remains unverified.
-- **Analytics increment:** the user pulled analytics forward and authorized its plan. Stats, bounded best-effort recording and failure isolation are implemented; see [scenario 3](03-ambiguous.md) and [verification](../testing.md#analytics-verification).
-- **Not yet demonstrated:** production performance or the complete service. Expiration and API-key protection remain deferred.
+**Observed results:** In the recorded local test, all 842,581 redirects completed correctly within 100 milliseconds, with no request errors. The workload used 1,000 saved links and ten clients for one minute after warm-up. See [service checks](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#current-checks-and-results) and [measured results](../measurements-and-results.md#performance-results).
 
-Contract: [architecture](../architecture.md#redirect-contract). Decisions: [AI-human log](../ai-log.md).
+**Limitations:** These checks measure the shortener's response, not whether the destination page loaded. The performance result describes the selected local workload, not production capacity.
+
+**Related work:** The later change to reuse a short link for an identical destination is covered in the [brownfield scenario](02-brownfield.md).
+
+## 2. View recorded usage for a short link
+
+**Goal:** Let someone see a short link's recorded redirect count and the time of its latest recorded redirect.
+
+| Decomposition — what needed to be solved | Execution — what we built | Validation — how we checked it |
+| --- | --- | --- |
+| Make usage information available for each saved link. | Added a statistics response showing the link's code, recorded redirect count and latest recorded time. An unused link starts at zero with no recorded time. | Checked unused links, used links and unknown codes. Confirmed that different links have separate statistics and that unavailable storage produces a clear error. |
+| Count the agreed types of activity consistently. | Recorded requests accepted for redirection, including repeated requests and automated visitors. Creating a link, reading statistics, checking response headers alone and failed lookups do not increase the count. | Tested both counted and excluded requests. Confirmed that reusing an existing short link preserves its statistics. |
+| Keep valid redirects working when recording is slow or fails. | Recorded usage in the background through a limited waiting queue. When recording cannot keep up, events may be dropped or remain unconfirmed, and those losses are reported. | Deliberately filled the queue, blocked database writes and caused recording failures. Confirmed that valid redirects continued and later recording recovered. |
+| Keep counts correct when requests arrive together. | Made count updates add together without overwriting each other. Kept the latest recorded request time even when events arrived out of order. | Sent simultaneous requests and submitted older events after newer ones. Confirmed that counts matched and the latest recorded time did not move backward. |
+| Preserve saved links and statistics through database changes and restarts. | Added separate usage storage while retaining existing links. Recorded totals remain in the database after the application stops. | Updated a populated test database and restarted the application. Confirmed that existing links and saved counts remained available. |
+
+**Observed results:** The local load check saved all 1,029,604 expected events from warm-up and measurement. Every link's count matched, with no dropped or unconfirmed events in that run. See [analytics checks](https://github.com/jyshnkr/url-shortener/blob/11b68fa4593a479bdbe1f5a5d227f6c0248e99fd/docs/testing.md#analytics-verification) and [measured results](../measurements-and-results.md#performance-results).
+
+**Limitations:** Counts may arrive late or miss activity during overload, recording failures or abrupt shutdown. They do not represent unique people or prove that a destination page was viewed. Database problems that prevent looking up the destination can still stop redirects.
+
+**Related work:** The decision to prioritize valid redirects over complete statistics is covered in the [ambiguous-requirement scenario](03-ambiguous.md).
+
+Decisions and contributions are recorded separately in the [AI-human traceability log](../ai-log.md).
