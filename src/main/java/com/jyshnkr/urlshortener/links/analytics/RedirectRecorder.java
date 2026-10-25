@@ -18,7 +18,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public final class RedirectRecorder implements AutoCloseable {
+/** In-process transport: a bounded queue and one background worker writing batches. */
+public final class RedirectRecorder implements RedirectRecording, AutoCloseable {
   private static final Logger LOG = LoggerFactory.getLogger(RedirectRecorder.class);
 
   private record Event(String code, Instant at) {}
@@ -71,6 +72,7 @@ public final class RedirectRecorder implements AutoCloseable {
     worker.start();
   }
 
+  @Override
   public void record(String code) {
     var event = new Event(code, clock.instant());
     // Admission versus shutdown only: never SQL, logging or waiting for queue space.

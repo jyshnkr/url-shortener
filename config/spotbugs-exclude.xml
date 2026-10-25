@@ -33,4 +33,19 @@
     <Field name="writer"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
+  <!-- Constructor-injected storage boundary; the consumer owns and closes the writer. -->
+  <Match>
+    <Class name="com.jyshnkr.urlshortener.links.analytics.RedirectEventConsumer"/>
+    <Method name="&lt;init&gt;"/>
+    <Field name="writer"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <!-- Constructor injection intentionally shares Spring's thread-safe KafkaTemplate bean;
+       the publisher only sends through it and never changes its configuration. -->
+  <Match>
+    <Class name="com.jyshnkr.urlshortener.links.analytics.KafkaRedirectPublisher"/>
+    <Method name="&lt;init&gt;"/>
+    <Field name="template"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
 </FindBugsFilter>

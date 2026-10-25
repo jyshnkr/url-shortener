@@ -252,12 +252,15 @@ class AnalyticsPersistenceIT {
   }
 
   private ConfigurableApplicationContext start(PostgreSQLContainer database) {
+    // The restart check relies on the in-process recorder's shutdown drain. The Kafka equivalent
+    // is in KafkaAnalyticsLifecycleIT.
     return new SpringApplicationBuilder(UrlShortenerApplication.class)
         .run(
             "--server.port=0",
             "--spring.datasource.url=" + database.getJdbcUrl(),
             "--spring.datasource.username=" + database.getUsername(),
-            "--spring.datasource.password=" + database.getPassword());
+            "--spring.datasource.password=" + database.getPassword(),
+            "--shortener.analytics.transport=in-process");
   }
 
   private HttpResponse<String> get(

@@ -1,6 +1,6 @@
 package com.jyshnkr.urlshortener.links.controller;
 
-import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder;
+import com.jyshnkr.urlshortener.links.analytics.RedirectRecording;
 import com.jyshnkr.urlshortener.links.exception.LinkFailure;
 import com.jyshnkr.urlshortener.links.model.CreateLinkRequest;
 import com.jyshnkr.urlshortener.links.model.CreateLinkResponse;
@@ -27,13 +27,13 @@ class LinksController {
   private final LinkCreationService links;
   private final LinkResolutionService resolution;
   private final LinkAnalyticsService analytics;
-  private final RedirectRecorder recorder;
+  private final RedirectRecording recorder;
 
   LinksController(
       LinkCreationService links,
       LinkResolutionService resolution,
       LinkAnalyticsService analytics,
-      RedirectRecorder recorder) {
+      RedirectRecording recorder) {
     this.links = links;
     this.resolution = resolution;
     this.analytics = analytics;
