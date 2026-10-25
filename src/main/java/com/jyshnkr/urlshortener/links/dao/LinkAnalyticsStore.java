@@ -2,16 +2,23 @@ package com.jyshnkr.urlshortener.links.dao;
 
 import com.jyshnkr.urlshortener.links.exception.LinkFailure;
 import com.jyshnkr.urlshortener.links.model.LinkStats;
+import com.jyshnkr.urlshortener.links.model.RedirectEvent;
 import com.jyshnkr.urlshortener.links.model.RedirectIncrement;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.UUID;
 import javax.sql.DataSource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.support.SqlArrayValue;
+import org.springframework.transaction.support.TransactionTemplate;
 
 public final class LinkAnalyticsStore {
   private final JdbcTemplate jdbc;
+  private final TransactionTemplate transactions;
 
   public void increment(List<RedirectIncrement> increments) {
     if (increments.isEmpty()) {
@@ -34,9 +41,49 @@ public final class LinkAnalyticsStore {
                 .toArray()));
   }
 
+  /**
+   * Counts each event ID at most once. Saving the IDs and the counters in one transaction means a
+   * redelivered event is skipped, and a failed call saves neither.
+   *
+   * @return the number of events counted by this call
+   */
+  public int incrementNewEvents(List<RedirectEvent> events) {
+    // Sorted, distinct IDs give simultaneous writers a consistent unique-index lock order.
+    var byId = new TreeMap<UUID, RedirectEvent>();
+    events.forEach(event -> byId.putIfAbsent(event.eventId(), event));
+    if (byId.isEmpty()) {
+      return 0;
+    }
+    var counted = new ArrayList<RedirectEvent>();
+    transactions.executeWithoutResult(
+        status -> {
+          counted.clear();
+          for (String id :
+              jdbc.queryForList(
+                  """
+                  INSERT INTO processed_redirect_events (event_id)
+                  SELECT * FROM unnest(?::uuid[])
+                  ON CONFLICT (event_id) DO NOTHING
+                  RETURNING event_id::text
+                  """,
+                  String.class,
+                  new SqlArrayValue(
+                      "uuid", byId.keySet().stream().map(UUID::toString).toArray()))) {
+            counted.add(byId.get(UUID.fromString(id)));
+          }
+          increment(
+              RedirectIncrement.combine(
+                  counted.stream()
+                      .map(event -> new RedirectIncrement(event.code(), 1, event.redirectedAt()))
+                      .toList()));
+        });
+    return counted.size();
+  }
+
   public LinkAnalyticsStore(DataSource dataSource) {
     jdbc = new JdbcTemplate(dataSource);
     jdbc.setQueryTimeout(3);
+    transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
   }
 
   public Optional<LinkStats> findByCode(String code) {
