@@ -11,13 +11,13 @@ Report paths below are relative to `target/`, unless stated otherwise.
 | Check | Tools | What it checks | Reports | Failure means |
 |---|---|---|---|---|
 | Unit tests | JUnit, AssertJ, Mockito, Awaitility, Surefire | Individual logic and edge cases | `surefire-reports/` | An unexpected result or test error |
-| Integration tests | Spring Boot, Testcontainers, Failsafe | HTTP behavior, PostgreSQL, migrations, concurrency and recovery | `failsafe-reports/` | A behavior mismatch or setup failure |
+| Integration tests | Spring Boot, Testcontainers, Failsafe | HTTP behavior, PostgreSQL, Kafka, migrations, concurrency and recovery | `failsafe-reports/` | A behavior mismatch or setup failure |
 | Formatting | Spotless | Consistent Java formatting | Console output | Files need formatting |
 | Static analysis | SpotBugs, Find Security Bugs | Potential code defects | `spotbugsXml.xml` | A reported issue needs review |
 | Dependency scan | CycloneDX, OSV-Scanner | Known dependency vulnerabilities | `bom.json`, `security/osv.json` | A vulnerability or scanner error |
 | Secret scans | Gitleaks | Exposed secrets in files and Git history | `security/gitleaks-*.json` | A detected secret or scanner error |
 
-Tests cover creation and reuse, address validation, redirects, usage recording, restarts and database failures. Unit tests also check performance-report calculations.
+Tests cover creation and reuse, address validation, redirects, usage recording through both transports, restarts and database failures. Kafka tests also cover duplicate and redelivered events and an unreachable broker. Unit tests also check performance-report calculations.
 
 Test files are under `src/test/java/`: `*Test` for unit tests and `*IT` for integration tests.
 
@@ -35,7 +35,7 @@ java -version
 docker info
 ```
 
-Use the included Maven wrapper. Tests start their own application instances and disposable databases; leave the development database out of the test setup.
+Use the included Maven wrapper. Tests start their own application instances, disposable databases and Kafka brokers (`apache/kafka` images); leave the Compose services out of the test setup. Each Spring test context gets its own broker, so cached contexts never share a consumer group. Tests that check the in-process queue select it with `shortener.analytics.transport=in-process`.
 
 Allow network access for uncached downloads and dependency vulnerability scans. Security scans require Bash.
 
@@ -76,8 +76,8 @@ Choose the relevant group:
 # Redirects
 ./mvnw -Dit.test=RedirectLinkIT,CreationLifecycleIT verify
 
-# Usage statistics
-./mvnw -Dit.test=LinkAnalyticsIT,AnalyticsFailureIT,AnalyticsPersistenceIT verify
+# Usage statistics: Kafka transport, in-process transport and storage
+./mvnw -Dit.test=KafkaAnalyticsIT,KafkaAnalyticsLifecycleIT,LinkAnalyticsIT,AnalyticsFailureIT,AnalyticsPersistenceIT verify
 ```
 
 These retain unit tests, formatting and static analysis. Run full verification before considering the change verified.

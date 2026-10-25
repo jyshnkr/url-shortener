@@ -18,6 +18,12 @@ Complete the testing setup, then run these commands from the repository root:
 
 The performance command replaces the normal integration suite with the performance test. Unit tests, formatting and static analysis still run. Ordinary verification and GitHub Actions exclude the performance test.
 
+The check uses the application's default usage transport, Kafka, with a disposable single-broker `apache/kafka` container. To reproduce the earlier in-process runs, select that transport:
+
+```bash
+./mvnw -B -ntp -Pperformance verify -Dperformance.analytics.transport=in-process
+```
+
 > Save required reports outside `target/` before using `clean`.
 
 Completed measurements write `report.json`, `requests.csv` and `summary.txt` into a unique directory under `target/performance/`. A missed target fails the command and retains its reports. A startup failure may occur before measurement reports exist.
@@ -37,7 +43,7 @@ Completed measurements write `report.json`, `requests.csv` and `summary.txt` int
 
 Startup, link creation, warm-up and destination-page loading are excluded from latency measurements. Clients do not follow redirects or retry failed requests. Incorrect responses and timeouts remain in the results.
 
-The usage-recording check includes successful redirects from **both warm-up and measurement**. It requires matching counts, no dropped or unconfirmed events, no pending events and a running recording worker.
+The usage-recording check includes successful redirects from **both warm-up and measurement**. Every link's saved count must match. For the in-process transport, it also requires no dropped or unconfirmed events, no pending events and a running recording worker. For Kafka, every event must be acknowledged by the broker and newly counted by the consumer, with no publish failures, rejected messages, failed writes or unacknowledged events. Skipped duplicates are reported but allowed, because matching counts show none was counted twice.
 
 <a id="observed-run"></a>
 <a id="analytics-enabled-performance-result"></a>
@@ -74,6 +80,16 @@ For the run with usage recording:
 | Unconfirmed writes | 0 |
 | Time to finish recording after HTTP completion | 0.159 seconds |
 | Events still queued or being written | 0 |
+
+<a id="kafka-transport-results"></a>
+
+## Kafka transport results
+
+**Not yet measured.** No run with the Kafka transport has been recorded. Kafka became the default in an environment without access to Maven Central or container registries, so the performance check could not run there.
+
+The results above used the in-process transport, the only one available at the time. They do not describe the Kafka transport.
+
+To record a Kafka run, use the same workload and the command in [Run the performance check](#redirect-performance-baseline). Then add the completed attempts per second, 95th percentile, errors and timeouts, and saved versus expected events, with the publisher's and consumer's diagnostics and the environment.
 
 ## Calculations
 
