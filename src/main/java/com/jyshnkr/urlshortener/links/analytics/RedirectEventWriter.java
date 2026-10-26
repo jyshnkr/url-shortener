@@ -1,6 +1,7 @@
 package com.jyshnkr.urlshortener.links.analytics;
 
 import com.jyshnkr.urlshortener.links.model.RedirectEvent;
+import com.jyshnkr.urlshortener.links.model.RedirectEventBatchResult;
 import java.util.List;
 
 /**
@@ -8,8 +9,11 @@ import java.util.List;
  * atomically with the counter update; an exception means nothing from the call was saved.
  */
 public interface RedirectEventWriter extends AutoCloseable {
-  /** Returns how many events were newly counted; the rest were already recorded. */
-  int recordNewEvents(List<RedirectEvent> events);
+  /**
+   * Returns how many events were newly counted and how many were skipped because their short code
+   * has no saved link; the rest were already recorded.
+   */
+  RedirectEventBatchResult recordNewEvents(List<RedirectEvent> events);
 
   @Override
   void close();

@@ -42,9 +42,27 @@ class RedirectEventFormatTest {
         "{\"eventId\":7,\"code\":\"Abcdef1234\",\"redirectedAt\":\"2026-10-25T12:00:00Z\"}",
         "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef123!\",\"redirectedAt\":\"2026-10-25T12:00:00Z\"}",
         "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\",\"redirectedAt\":\"yesterday\"}",
-        "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\"}"
+        "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\"}",
+        // Valid instants that PostgreSQL could not store, so no retry could ever save them.
+        "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\",\"redirectedAt\":\"+10000-01-01T00:00:00Z\"}",
+        "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\",\"redirectedAt\":\"0000-12-31T23:59:59Z\"}",
+        "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\",\"redirectedAt\":\"+1000000000-12-31T23:59:59.999999999Z\"}",
+        "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\",\"redirectedAt\":\"-1000000000-01-01T00:00:00Z\"}"
       })
   void messagesThisServiceCouldNotHavePublishedAreRejected(String message) {
     assertThat(RedirectEventFormat.read(message)).isEmpty();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0001-01-01T00:00:00Z", "9999-12-31T23:59:59.999999999Z"})
+  void timestampsAtTheEdgesOfTheStorableRangeAreAccepted(String redirectedAt) {
+    String message =
+        "{\"eventId\":\"3f1c6c5e-8a43-4c9b-9a55-2b0b7f5d9e01\",\"code\":\"Abcdef1234\",\"redirectedAt\":\""
+            + redirectedAt
+            + "\"}";
+
+    assertThat(RedirectEventFormat.read(message))
+        .hasValueSatisfying(
+            event -> assertThat(event.redirectedAt()).isEqualTo(Instant.parse(redirectedAt)));
   }
 }

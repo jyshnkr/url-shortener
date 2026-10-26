@@ -54,7 +54,8 @@ class LinksConfiguration {
 
   /**
    * Retries a failed batch from memory every second until it is saved. The default handler gives up
-   * after ten attempts and commits the offsets, which would lose those events.
+   * after ten attempts and commits the offsets, which would lose those events. Events that no retry
+   * could save are skipped before they reach the database write, so this covers temporary failures.
    */
   @Bean
   @ConditionalOnProperty(name = TRANSPORT, havingValue = "kafka", matchIfMissing = true)

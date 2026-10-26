@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.jyshnkr.urlshortener.links.analytics.RedirectEventConsumer.Diagnostics;
 import com.jyshnkr.urlshortener.links.model.RedirectEvent;
+import com.jyshnkr.urlshortener.links.model.RedirectEventBatchResult;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.HashSet;
@@ -18,26 +19,33 @@ import org.junit.jupiter.api.Test;
 class RedirectEventConsumerTest {
   private static final class CloseableMeters extends SimpleMeterRegistry implements AutoCloseable {}
 
-  /** Behaves like the database: an event ID is counted once, and a failed call saves nothing. */
+  /**
+   * Behaves like the database: an event ID is counted once, an event for a short code without a
+   * saved link is skipped, and a failed call saves nothing.
+   */
   private static final class RecordingWriter implements RedirectEventWriter {
     private final List<List<RedirectEvent>> calls = new CopyOnWriteArrayList<>();
     private final Set<UUID> saved = new HashSet<>();
+    private final Set<String> unlinkedCodes = new HashSet<>();
     private volatile RuntimeException failure;
     private volatile boolean closed;
 
     @Override
-    public int recordNewEvents(List<RedirectEvent> events) {
+    public RedirectEventBatchResult recordNewEvents(List<RedirectEvent> events) {
       if (failure != null) {
         throw failure;
       }
       calls.add(List.copyOf(events));
       int counted = 0;
+      int unknown = 0;
       for (var event : events) {
-        if (saved.add(event.eventId())) {
+        if (unlinkedCodes.contains(event.code())) {
+          unknown++;
+        } else if (saved.add(event.eventId())) {
           counted++;
         }
       }
-      return counted;
+      return new RedirectEventBatchResult(counted, unknown);
     }
 
     @Override
@@ -77,6 +85,29 @@ class RedirectEventConsumerTest {
       assertThat(consumer.diagnostics()).isEqualTo(new Diagnostics(7, 2, 2, 3, 0));
       assertThat(counter(metrics, "recorded")).isEqualTo(2);
       assertThat(counter(metrics, "duplicate")).isEqualTo(2);
+      assertThat(counter(metrics, "rejected")).isEqualTo(3);
+    }
+  }
+
+  @Test
+  void eventsForShortCodesWithoutASavedLinkAreRejectedNotCountedAsDuplicates() {
+    var writer = new RecordingWriter();
+    writer.unlinkedCodes.addAll(Set.of("Absent1234", "Absent5678"));
+    try (var metrics = new CloseableMeters()) {
+      var consumer = new RedirectEventConsumer(writer, metrics);
+
+      var repeated = new RedirectEvent(UUID.randomUUID(), "Absent5678", AT);
+      consumer.consume(
+          List.of(
+              event(0, new RedirectEvent(UUID.randomUUID(), "Abcdef1234", AT)),
+              event(1, new RedirectEvent(UUID.randomUUID(), "Absent1234", AT)),
+              event(2, repeated),
+              event(3, repeated)));
+
+      // Every copy of an unlinked event is rejected; none is reported as a duplicate.
+      assertThat(consumer.diagnostics()).isEqualTo(new Diagnostics(4, 1, 0, 3, 0));
+      assertThat(counter(metrics, "recorded")).isEqualTo(1);
+      assertThat(counter(metrics, "duplicate")).isZero();
       assertThat(counter(metrics, "rejected")).isEqualTo(3);
     }
   }

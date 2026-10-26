@@ -141,6 +141,37 @@ class KafkaAnalyticsIT {
   }
 
   @Test
+  void eventsThatCanNeverBeSavedAreRejectedWithoutBlockingLaterEvents() throws Exception {
+    String code = createLink();
+    var unknownLink = new RedirectEvent(UUID.randomUUID(), "Absent1234", Instant.now());
+    var unstorableTime = new RedirectEvent(UUID.randomUUID(), code, Instant.MAX);
+    var before = consumer.diagnostics();
+
+    // Keyed by the real code, so both share its partition and sit ahead of the redirect below.
+    kafka.send(topic, code, RedirectEventFormat.write(unknownLink)).get(10, TimeUnit.SECONDS);
+    kafka.send(topic, code, RedirectEventFormat.write(unstorableTime)).get(10, TimeUnit.SECONDS);
+    assertThat(send("/r/" + code, "GET").statusCode()).isEqualTo(302);
+
+    awaitCount(code, 1);
+    await()
+        .atMost(RECORDING_WAIT)
+        .untilAsserted(
+            () -> {
+              var now = consumer.diagnostics();
+              assertThat(now.rejected() - before.rejected()).isEqualTo(2);
+              assertThat(now.recorded() - before.recorded()).isEqualTo(1);
+              assertThat(now.failedWrites()).isEqualTo(before.failedWrites());
+            });
+    assertThat(
+            new JdbcTemplate(database)
+                .queryForObject(
+                    "SELECT count(*) FROM processed_redirect_events WHERE event_id = ?",
+                    Long.class,
+                    unknownLink.eventId()))
+        .isZero();
+  }
+
+  @Test
   void redeliveringEveryEventAfterAnOffsetResetChangesNoCount() throws Exception {
     String code = createLink();
     for (int index = 0; index < 3; index++) {
@@ -185,15 +216,19 @@ class KafkaAnalyticsIT {
         container.start();
       }
 
-      // Every replayed event is recognized as already counted; none is counted again.
+      // Every replayed event is recognized as already counted, or rejected again if it never could
+      // be counted; none is counted again.
       await()
           .atMost(RECORDING_WAIT)
           .untilAsserted(
               () -> {
                 var now = consumer.diagnostics();
                 long replayed = now.received() - before.received();
+                long rejectedAgain = now.rejected() - before.rejected();
                 assertThat(replayed).isGreaterThanOrEqualTo(published);
-                assertThat(now.duplicates() - before.duplicates()).isEqualTo(replayed);
+                assertThat(rejectedAgain).isEqualTo(before.rejected());
+                assertThat(now.duplicates() - before.duplicates())
+                    .isEqualTo(replayed - rejectedAgain);
                 assertThat(now.recorded()).isEqualTo(before.recorded());
               });
       assertThat(allCounts()).isEqualTo(savedCounts);

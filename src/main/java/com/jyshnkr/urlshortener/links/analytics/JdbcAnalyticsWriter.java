@@ -2,6 +2,7 @@ package com.jyshnkr.urlshortener.links.analytics;
 
 import com.jyshnkr.urlshortener.links.dao.LinkAnalyticsStore;
 import com.jyshnkr.urlshortener.links.model.RedirectEvent;
+import com.jyshnkr.urlshortener.links.model.RedirectEventBatchResult;
 import com.jyshnkr.urlshortener.links.model.RedirectIncrement;
 import com.zaxxer.hikari.HikariDataSource;
 import java.util.List;
@@ -38,7 +39,7 @@ public final class JdbcAnalyticsWriter implements AnalyticsBatchWriter, Redirect
   }
 
   @Override
-  public int recordNewEvents(List<RedirectEvent> events) {
+  public RedirectEventBatchResult recordNewEvents(List<RedirectEvent> events) {
     return store.incrementNewEvents(events);
   }
 

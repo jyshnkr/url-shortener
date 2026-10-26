@@ -1,6 +1,7 @@
 package com.jyshnkr.urlshortener.links.analytics;
 
 import com.jyshnkr.urlshortener.links.model.RedirectEvent;
+import com.jyshnkr.urlshortener.links.model.RedirectEventBatchResult;
 import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
@@ -62,10 +63,10 @@ public final class RedirectEventConsumer implements AutoCloseable {
       RedirectEventFormat.read(message.value()).ifPresent(events::add);
     }
     int malformed = records.size() - events.size();
-    int counted;
+    RedirectEventBatchResult result;
     boolean saved = false;
     try {
-      counted = writer.recordNewEvents(events);
+      result = writer.recordNewEvents(events);
       saved = true;
     } finally {
       if (!saved) {
@@ -78,12 +79,16 @@ public final class RedirectEventConsumer implements AutoCloseable {
         }
       }
     }
-    recorded.addAndGet(counted);
-    duplicates.addAndGet(events.size() - counted);
-    if (malformed > 0) {
-      long skipped = rejected.addAndGet(malformed);
+    recorded.addAndGet(result.counted());
+    duplicates.addAndGet(events.size() - result.counted() - result.unknownLinks());
+    int notSavable = malformed + result.unknownLinks();
+    if (notSavable > 0) {
+      long skipped = rejected.addAndGet(notSavable);
       if (dueForWarning(lastRejectionWarning)) {
-        LOG.warn("Analytics recording incomplete: malformed events skipped (rejected={})", skipped);
+        LOG.warn(
+            "Analytics recording incomplete: malformed events or events for unknown short links"
+                + " skipped (rejected={})",
+            skipped);
       }
     }
     // Last, so a reader that sees the batch as received also sees its other counts.

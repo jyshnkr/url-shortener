@@ -11,6 +11,11 @@ import tools.jackson.databind.json.JsonMapper;
 /** Kafka message value: {"eventId":"<UUID>","code":"<short code>","redirectedAt":"<UTC>"}. */
 public final class RedirectEventFormat {
   private static final JsonMapper JSON = JsonMapper.builder().build();
+  // The store passes Instant.toString() to PostgreSQL as text, and PostgreSQL parses that only for
+  // years 0001-9999. Instant.parse accepts more, and such an event would fail every write attempt
+  // and block the events behind it, so it is rejected here instead.
+  private static final Instant EARLIEST_STORABLE = Instant.parse("0001-01-01T00:00:00Z");
+  private static final Instant LATEST_STORABLE = Instant.parse("+10000-01-01T00:00:00Z");
 
   public static String write(RedirectEvent event) {
     return JSON.createObjectNode()
@@ -33,8 +38,11 @@ public final class RedirectEventFormat {
       if (eventId == null || redirectedAt == null || !ShortCodeValidator.isValid(code)) {
         return Optional.empty();
       }
-      return Optional.of(
-          new RedirectEvent(UUID.fromString(eventId), code, Instant.parse(redirectedAt)));
+      var at = Instant.parse(redirectedAt);
+      if (at.isBefore(EARLIEST_STORABLE) || !at.isBefore(LATEST_STORABLE)) {
+        return Optional.empty();
+      }
+      return Optional.of(new RedirectEvent(UUID.fromString(eventId), code, at));
     } catch (RuntimeException malformed) {
       // Invalid JSON, UUID or timestamp: retrying cannot make the message valid.
       return Optional.empty();

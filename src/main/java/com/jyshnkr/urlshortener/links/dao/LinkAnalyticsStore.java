@@ -3,8 +3,10 @@ package com.jyshnkr.urlshortener.links.dao;
 import com.jyshnkr.urlshortener.links.exception.LinkFailure;
 import com.jyshnkr.urlshortener.links.model.LinkStats;
 import com.jyshnkr.urlshortener.links.model.RedirectEvent;
+import com.jyshnkr.urlshortener.links.model.RedirectEventBatchResult;
 import com.jyshnkr.urlshortener.links.model.RedirectIncrement;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -45,19 +47,49 @@ public final class LinkAnalyticsStore {
    * Counts each event ID at most once. Saving the IDs and the counters in one transaction means a
    * redelivered event is skipped, and a failed call saves neither.
    *
-   * @return the number of events counted by this call
+   * <p>An event whose short code has no saved link is skipped and its ID is not saved: counting it
+   * would violate the foreign key and fail on every retry, blocking the events behind it. The skip
+   * is permanent for that event, even if the link is saved later. This service publishes an event
+   * only for a link it has already saved, so such events come from a reset database or another
+   * producer.
    */
-  public int incrementNewEvents(List<RedirectEvent> events) {
+  public RedirectEventBatchResult incrementNewEvents(List<RedirectEvent> events) {
     // Sorted, distinct IDs give simultaneous writers a consistent unique-index lock order.
     var byId = new TreeMap<UUID, RedirectEvent>();
     events.forEach(event -> byId.putIfAbsent(event.eventId(), event));
     if (byId.isEmpty()) {
-      return 0;
+      return new RedirectEventBatchResult(0, 0);
     }
     var counted = new ArrayList<RedirectEvent>();
+    var unknownLinks = new ArrayList<RedirectEvent>();
     transactions.executeWithoutResult(
         status -> {
           counted.clear();
+          unknownLinks.clear();
+          // The service has no way to delete a link, so a code found here still has its link when
+          // the counts are saved.
+          var linked =
+              new HashSet<>(
+                  jdbc.queryForList(
+                      "SELECT short_code FROM short_links WHERE short_code = ANY(?::text[])",
+                      String.class,
+                      new SqlArrayValue(
+                          "text",
+                          byId.values().stream().map(RedirectEvent::code).distinct().toArray())));
+          // Every copy of an unlinked event is reported, so repeats are rejected like the first.
+          events.stream()
+              .filter(event -> !linked.contains(event.code()))
+              .forEach(unknownLinks::add);
+          var saveable = new TreeMap<UUID, RedirectEvent>();
+          byId.forEach(
+              (id, event) -> {
+                if (linked.contains(event.code())) {
+                  saveable.put(id, event);
+                }
+              });
+          if (saveable.isEmpty()) {
+            return;
+          }
           for (String id :
               jdbc.queryForList(
                   """
@@ -68,8 +100,8 @@ public final class LinkAnalyticsStore {
                   """,
                   String.class,
                   new SqlArrayValue(
-                      "uuid", byId.keySet().stream().map(UUID::toString).toArray()))) {
-            counted.add(byId.get(UUID.fromString(id)));
+                      "uuid", saveable.keySet().stream().map(UUID::toString).toArray()))) {
+            counted.add(saveable.get(UUID.fromString(id)));
           }
           increment(
               RedirectIncrement.combine(
@@ -77,7 +109,7 @@ public final class LinkAnalyticsStore {
                       .map(event -> new RedirectIncrement(event.code(), 1, event.redirectedAt()))
                       .toList()));
         });
-    return counted.size();
+    return new RedirectEventBatchResult(counted.size(), unknownLinks.size());
   }
 
   public LinkAnalyticsStore(DataSource dataSource) {
