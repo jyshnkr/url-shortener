@@ -85,11 +85,33 @@ For the run with usage recording:
 
 ## Kafka transport results
 
-**Not yet measured.** No run with the Kafka transport has been recorded. Kafka became the default in an environment without access to Maven Central or container registries, so the performance check could not run there.
+The run used the workload above with the default Kafka transport and met its targets.
 
-The results above used the in-process transport, the only one available at the time. They do not describe the Kafka transport.
+| Measure | Kafka transport |
+|---|---:|
+| Measurement start, October 26, 2026 | 10:06:10 Central |
+| Revision and working tree | `c5108c6`, clean |
+| Attempts / correct redirects | 836,400 / 836,400 |
+| Errors / timeouts | 0 / 0 |
+| Attempts within 100 ms | 100% |
+| Median response time | 0.695709 ms |
+| 95th percentile | 0.943958 ms |
+| 99th percentile | 1.14575 ms |
+| Longest response time | 12.860375 ms |
+| Completed attempts per second | 13,939.902 |
+| Final request completion after the interval | 0.421083 ms |
 
-To record a Kafka run, use the same workload and the command in [Run the performance check](#redirect-performance-baseline). Then add the completed attempts per second, 95th percentile, errors and timeouts, and saved versus expected events, with the publisher's and consumer's diagnostics and the environment.
+| Measure | Result |
+|---|---:|
+| Expected events, including warm-up | 1,016,423 |
+| Saved events | 1,016,423 |
+| Links with mismatched counts | 0 |
+| Time to finish recording after HTTP completion | 0.00132825 seconds |
+| Publisher: submitted / acknowledged by the broker / publish failures | 1,016,423 / 1,016,423 / 0 |
+| Consumer: received / newly counted | 1,016,423 / 1,016,423 |
+| Consumer: skipped duplicates / rejected messages / failed writes | 0 / 0 / 0 |
+
+The in-process runs used different Java and macOS versions (see [Evidence and limits](#evidence-and-limits)), so this is not a controlled comparison.
 
 ## Calculations
 
@@ -133,10 +155,13 @@ Matching totals alone are insufficient: every link’s count must match, and the
 
 Both runs used macOS 27.0 on ARM64, 12 available processors, Eclipse Adoptium Java 21.0.12.1+1-LTS and PostgreSQL 17.11 in Docker.
 
+The Kafka run used a Mac14,13 (Apple M2 Max, 12 processors), macOS 27.0.1 (26A434), Eclipse Adoptium Java 21.0.13+9-LTS, Docker Desktop 4.96.3 with Docker Engine 29.9.2 (VM: 12 CPUs, 8 GiB memory), `apache/kafka:4.2.2` (Kafka client 4.2.1) and `postgres:17.11`.
+
 | Evidence | Location |
 |---|---|
 | Before usage recording | [Performance report](../target/performance/20260917T194206Z-dc9df218-71df-43b3-9ebc-2e04ca122823/report.json) |
 | With usage recording | [Performance report](../target/performance/20260917T212803Z-445238a1-d75b-407a-90c5-6950b9c0d62f/report.json) |
+| Kafka transport | [Performance report](../target/performance/20261026T150610Z-16c18b1a-253f-4ed5-837e-319ee4473064/report.json) |
 
 Each report directory also contains per-request data and a text summary. Independent calculations recorded during the original verification matched both reports.
 
