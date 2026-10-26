@@ -18,9 +18,21 @@
 
   <properties>
     <java.version>21</java.version>
-    <!-- Approved patch override; rationale and removal condition in docs/ai-log.md. -->
+    <!-- Approved patch overrides; rationale and removal conditions in docs/ai-log.md. -->
     <tomcat.version>11.0.26</tomcat.version>
+    <jackson-bom.version>3.1.7</jackson-bom.version>
   </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Kafka's client brings a vulnerable 1.10.1 through its own dependency declaration. -->
+      <dependency>
+        <groupId>at.yawk.lz4</groupId>
+        <artifactId>lz4-java</artifactId>
+        <version>1.11.4</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>
