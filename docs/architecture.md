@@ -172,7 +172,7 @@ A destination fingerprint is a fixed-size SHA-256 value used for indexed lookup.
 
 Usage rows are created when events are first saved. A link without a usage row returns a count of zero and a null timestamp.
 
-`processed_redirect_events` holds the event IDs the Kafka consumer has counted. It is written in the same transaction as `link_analytics` and has no foreign key to `short_links`. It gains one row per counted event; no retention or cleanup is configured yet.
+`processed_redirect_events` holds the event IDs the Kafka consumer has counted. It is written in the same transaction as `link_analytics` and has no foreign key to `short_links`; events for a short code with no saved link get no row. It gains one row per counted event; no retention or cleanup is configured yet.
 
 Flyway applies migrations at startup. Migrations preserve existing links; conflicting destination data causes the reuse migration to stop and roll back without deleting or merging mappings.
 
@@ -301,9 +301,11 @@ Accepted GET redirect (short code)
         │ One transaction on the writer's own pool
         ▼
 ┌──────────────────────────────────────────┐
-│       1. Insert the event IDs into       │
+│   1. Skip events whose short code has    │
+│   no saved link (counted as rejected)    │
+│    2. Insert the other event IDs into    │
 │  processed_redirect_events, skip known   │
-│    2. Add counts for new IDs only to     │
+│    3. Add counts for new IDs only to     │
 │   link_analytics; keep the latest time   │
 └───────┬──────────────────────────────────┘
         │
@@ -315,7 +317,7 @@ The request thread waits inside the producer only while topic metadata is unavai
 
 The broker creates `link-redirects` on first use (topic auto-creation). Local Compose gives new topics three partitions; where auto-creation is disabled, create the topic before starting the application, as the [README](../README.md#start-the-service) shows.
 
-Offsets are committed only after the database transaction commits. A failed write therefore leaves the batch uncommitted; the consumer pauses and retries the same batch every second, so a database outage delays statistics without losing acknowledged events. Statistics can lag by the consumer's batch time plus any backlog.
+Offsets are committed only after the database transaction commits. A failed write therefore leaves the batch uncommitted; the consumer pauses and retries the same batch every second, so a database outage delays statistics without losing acknowledged events. Only failures that a retry can cure reach this loop: an event that can never be saved, because its short code has no saved link or its timestamp is outside years 0001–9999 (the range the service can pass to PostgreSQL), is skipped and counted as rejected, so it cannot block the events behind it. Statistics can lag by the consumer's batch time plus any backlog.
 
 <a id="delivery-guarantee"></a>
 
@@ -403,7 +405,8 @@ The result returns through the service and controller to the caller. This path o
 | Kafka does not acknowledge an event | The producer retries within its two-minute delivery timeout, then the event counts as a publish failure; the redirect has already been returned |
 | Kafka: a usage write fails | Roll back event IDs and counts together; keep offsets uncommitted and retry the same batch every second |
 | Kafka: an event arrives again | Its event ID is already saved, so it counts as a duplicate and is not added again |
-| Kafka: a message is malformed | Skip it and count it as rejected; retrying cannot make it valid |
+| Kafka: a message is malformed, or its timestamp is outside years 0001–9999, the range the service can pass to PostgreSQL | Skip it and count it as rejected; retrying cannot make it valid |
+| Kafka: an event's short code has no saved link | Skip it, do not save its event ID, and count it as rejected, including repeated copies. The skip is permanent, even if the link is saved later; the service only publishes events for links it has already saved, so these come from a reset database or another producer |
 | In-process: recording queue is full | Drop the new event; continue the redirect |
 | In-process: a usage write fails | Mark the batch unconfirmed; do not retry because the original write may have committed |
 | Application stops normally | Kafka: the consumer finishes its current batch within ten seconds, and the producer sends buffered events, waiting at most 30 seconds. In-process: stop admitting events, allow five seconds to drain and bound the recorder's shutdown wait to fifteen seconds |

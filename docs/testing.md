@@ -17,7 +17,7 @@ Report paths below are relative to `target/`, unless stated otherwise.
 | Dependency scan | CycloneDX, OSV-Scanner | Known dependency vulnerabilities | `bom.json`, `security/osv.json` | A vulnerability or scanner error |
 | Secret scans | Gitleaks | Exposed secrets in files and Git history | `security/gitleaks-*.json` | A detected secret or scanner error |
 
-Tests cover creation and reuse, address validation, redirects, usage recording through both transports, restarts and database failures. Kafka tests also cover duplicate and redelivered events and an unreachable broker. Unit tests also check performance-report calculations.
+Tests cover creation and reuse, address validation, redirects, usage recording through both transports, restarts and database failures. Kafka tests also cover duplicate and redelivered events, events that can never be saved and an unreachable broker. Unit tests also check performance-report calculations.
 
 Test files are under `src/test/java/`: `*Test` for unit tests and `*IT` for integration tests.
 
