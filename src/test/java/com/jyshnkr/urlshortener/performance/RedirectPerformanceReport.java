@@ -1,5 +1,7 @@
 package com.jyshnkr.urlshortener.performance;
 
+import com.jyshnkr.urlshortener.links.analytics.KafkaRedirectPublisher;
+import com.jyshnkr.urlshortener.links.analytics.RedirectEventConsumer;
 import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder.Diagnostics;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -47,15 +49,38 @@ final class RedirectPerformanceReport {
       double completedRequestsPerSecond,
       boolean passed) {}
 
+  /** Diagnostics are the in-process recorder's, or the Kafka publisher's and consumer's. */
   record Analytics(
       long expectedRedirects,
       long persistedRedirects,
       long mismatchedLinks,
       double drainSeconds,
       boolean drained,
-      Diagnostics diagnostics,
+      Record diagnostics,
       String readFailure,
       boolean passed) {}
+
+  record KafkaDiagnostics(
+      KafkaRedirectPublisher.Diagnostics publisher, RedirectEventConsumer.Diagnostics consumer) {}
+
+  private record Counts(long expectedTotal, long persistedTotal, long mismatches) {
+    static Counts compare(Map<String, Long> expected, Map<String, Long> persisted) {
+      return new Counts(
+          expected.values().stream().mapToLong(Long::longValue).sum(),
+          persisted.values().stream().mapToLong(Long::longValue).sum(),
+          expected.entrySet().stream()
+              .filter(entry -> !entry.getValue().equals(persisted.getOrDefault(entry.getKey(), 0L)))
+              .count());
+    }
+
+    boolean complete(boolean drained, String readFailure) {
+      return expectedTotal > 0
+          && drained
+          && readFailure.isEmpty()
+          && mismatches == 0
+          && expectedTotal == persistedTotal;
+    }
+  }
 
   static Analytics summarizeAnalytics(
       Map<String, Long> expected,
@@ -64,25 +89,17 @@ final class RedirectPerformanceReport {
       boolean drained,
       Diagnostics diagnostics,
       String readFailure) {
-    long expectedTotal = expected.values().stream().mapToLong(Long::longValue).sum();
-    long persistedTotal = persisted.values().stream().mapToLong(Long::longValue).sum();
-    long mismatches =
-        expected.entrySet().stream()
-            .filter(entry -> !entry.getValue().equals(persisted.getOrDefault(entry.getKey(), 0L)))
-            .count();
+    var counts = Counts.compare(expected, persisted);
+    long expectedTotal = counts.expectedTotal();
     return new Analytics(
         expectedTotal,
-        persistedTotal,
-        mismatches,
+        counts.persistedTotal(),
+        counts.mismatches(),
         drainSeconds,
         drained,
         diagnostics,
         readFailure,
-        expectedTotal > 0
-            && drained
-            && readFailure.isEmpty()
-            && mismatches == 0
-            && expectedTotal == persistedTotal
+        counts.complete(drained, readFailure)
             && diagnostics.submitted() == expectedTotal
             && diagnostics.confirmedWrites() == expectedTotal
             && diagnostics.queueFullDrops() == 0
@@ -91,6 +108,38 @@ final class RedirectPerformanceReport {
             && diagnostics.queued() == 0
             && diagnostics.inFlight() == 0
             && diagnostics.workerAlive());
+  }
+
+  /**
+   * Every redirect must be published, consumed and counted once, with no failed or rejected events.
+   * Skipped duplicates are allowed: matching per-link counts show none was counted twice.
+   */
+  static Analytics summarizeKafkaAnalytics(
+      Map<String, Long> expected,
+      Map<String, Long> persisted,
+      double drainSeconds,
+      boolean drained,
+      KafkaDiagnostics diagnostics,
+      String readFailure) {
+    var counts = Counts.compare(expected, persisted);
+    long expectedTotal = counts.expectedTotal();
+    var publisher = diagnostics.publisher();
+    var consumer = diagnostics.consumer();
+    return new Analytics(
+        expectedTotal,
+        counts.persistedTotal(),
+        counts.mismatches(),
+        drainSeconds,
+        drained,
+        diagnostics,
+        readFailure,
+        counts.complete(drained, readFailure)
+            && publisher.submitted() == expectedTotal
+            && publisher.published() == expectedTotal
+            && publisher.failed() == 0
+            && consumer.recorded() == expectedTotal
+            && consumer.rejected() == 0
+            && consumer.failedWrites() == 0);
   }
 
   static Summary summarize(List<Attempt> attempts, long measurementNanos) {

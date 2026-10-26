@@ -32,7 +32,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// Covers the in-process transport; KafkaAnalyticsIT covers the default Kafka transport.
+@SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    properties = "shortener.analytics.transport=in-process")
 @Import(TestcontainersConfig.class)
 class LinkAnalyticsIT {
   private static final JsonMapper JSON = JsonMapper.builder().build();

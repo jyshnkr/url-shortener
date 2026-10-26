@@ -10,7 +10,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.TreeMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,7 +18,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public final class RedirectRecorder implements AutoCloseable {
+/** In-process transport: a bounded queue and one background worker writing batches. */
+public final class RedirectRecorder implements RedirectRecording, AutoCloseable {
   private static final Logger LOG = LoggerFactory.getLogger(RedirectRecorder.class);
 
   private record Event(String code, Instant at) {}
@@ -72,6 +72,7 @@ public final class RedirectRecorder implements AutoCloseable {
     worker.start();
   }
 
+  @Override
   public void record(String code) {
     var event = new Event(code, clock.instant());
     // Admission versus shutdown only: never SQL, logging or waiting for queue space.
@@ -150,22 +151,14 @@ public final class RedirectRecorder implements AutoCloseable {
   }
 
   private void write(List<Event> events) {
-    var increments = new TreeMap<String, RedirectIncrement>();
-    for (var event : events) {
-      increments.merge(
-          event.code(),
-          new RedirectIncrement(event.code(), 1, event.at()),
-          (a, b) ->
-              new RedirectIncrement(
-                  a.code(),
-                  a.count() + b.count(),
-                  a.lastRedirectedAt().isAfter(b.lastRedirectedAt())
-                      ? a.lastRedirectedAt()
-                      : b.lastRedirectedAt()));
-    }
+    var increments =
+        RedirectIncrement.combine(
+            events.stream()
+                .map(event -> new RedirectIncrement(event.code(), 1, event.at()))
+                .toList());
     try {
-      // Sorted keys give simultaneous writers a consistent row-lock order.
-      writer.write(List.copyOf(increments.values()));
+      // Sorted codes give simultaneous writers a consistent row-lock order.
+      writer.write(increments);
       confirmed.addAndGet(events.size());
     } catch (RuntimeException failure) {
       // A lost acknowledgement may hide a commit. Retrying could double-count this batch.

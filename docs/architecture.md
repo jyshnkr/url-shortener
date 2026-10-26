@@ -6,7 +6,7 @@
 
 The service creates reusable short links, redirects visitors to their saved destinations and reports recorded usage.
 
-One Spring Boot application handles these operations. PostgreSQL stores links and usage totals. Expiration, access protection and deployment remain deferred.
+One Spring Boot application handles these operations. PostgreSQL stores links and usage totals. By default, Apache Kafka carries usage events from redirects to the background usage writer; an in-process queue remains selectable. Expiration, access protection and deployment remain deferred.
 
 ### Functional requirements
 
@@ -25,8 +25,8 @@ One Spring Boot application handles these operations. PostgreSQL stores links an
 | Correctness | Keep short codes unique and prevent simultaneous creation requests from overwriting links or creating conflicting mappings. |
 | Redirect availability | Once destination lookup succeeds, slow or failed usage recording must not prevent the redirect. Recording losses must be observable. |
 | Response time | At least 95% of attempts complete within 100 ms, with zero errors, under the agreed local workload described in [Measurements and results](measurements-and-results.md#measurement-method). |
-| Persistence | Saved links and successfully recorded usage survive application restarts. Events still waiting in memory may be lost. |
-| Bounded work and waiting | Limit database waits, creation retries, recording queues and shutdown waits. Return safe errors without exposing database details. |
+| Persistence | Saved links and successfully recorded usage survive application restarts. With Kafka, events the broker has acknowledged are saved after a restart; events still in the producer's memory buffer may be lost. With the in-process queue, events still waiting in memory may be lost. |
+| Bounded work and waiting | Limit database waits, creation retries, recording queues, waits for Kafka and shutdown waits. Return safe errors without exposing database details. |
 | Reproducibility | Another engineer can start the project locally and run its checks using the documented prerequisites and commands. |
 
 ### System structure
@@ -76,7 +76,7 @@ The three operations share one controller and database pool. Arrows inside the a
 
 Creation and redirect lookup share `LinkStore`, but perform different operations. Statistics reads use `LinkAnalyticsStore` to join the link with its saved usage.
 
-The redirect handler also offers an event to an in-memory queue. The [redirect flow](#redirect-contract) shows this step and the separate background write path. Neither creation nor statistics reads enqueue events.
+The redirect handler also hands an event to the configured usage transport: Kafka by default, or the in-process queue. The [redirect flow](#redirect-contract) shows this step and the separate background write paths. Neither creation nor statistics reads produce events.
 
 ### Technologies
 
@@ -86,7 +86,8 @@ The redirect handler also offers an event to an in-memory queue. The [redirect f
 | Spring JDBC | SQL access |
 | PostgreSQL | Saved links and usage totals |
 | Flyway | Versioned database migrations |
-| Docker Compose | Local database setup |
+| Apache Kafka and Spring for Apache Kafka | Default transport for usage events between redirects and the usage writer |
+| Docker Compose | Local database and Kafka broker setup |
 
 ### Main operations
 
@@ -106,6 +107,8 @@ The redirect handler also offers an event to an in-memory queue. The [redirect f
 | Database-enforced uniqueness | Prevents simultaneous requests from creating conflicting mappings | Creation depends on successful database access |
 | Exact destination matching | Makes reuse predictable and preserves submitted addresses | Different text can produce separate links even when addresses appear equivalent |
 | Background usage recording | Redirects do not wait for usage writes | Counts can be delayed or lost |
+| Kafka transport with event-ID deduplication | Acknowledged events survive application restarts and database outages; redelivered copies are not counted twice | Adds a broker to run and monitor; one row per counted event is kept for deduplication |
+| In-process queue kept as an option | Runs without a broker and reproduces the earlier measurements | Queued events are lost on abrupt shutdown; a failed write is not retried |
 | Explicit SQL and versioned migrations | Makes storage operations and schema changes visible | Queries and migrations must be maintained alongside the code |
 
 The application binds to the local machine by default. It has no authentication or public-use protection.
@@ -120,7 +123,9 @@ The application binds to the local machine by default. It has no authentication 
 | Creation, resolution and analytics services | Apply the rules for creating links, finding destinations and reading usage |
 | Validators and code generator | Check inputs and generate random short codes |
 | `LinkStore` and `LinkAnalyticsStore` | Read and update PostgreSQL |
-| `RedirectRecorder` and `JdbcAnalyticsWriter` | Queue events, combine them into batches and save usage |
+| `KafkaRedirectPublisher` and `RedirectEventConsumer` | Kafka transport: publish one event per redirect; read events in batches and save each event ID once |
+| `RedirectRecorder` | In-process transport: queue events and combine them into batches |
+| `JdbcAnalyticsWriter` | Save usage through its own one-connection pool, for either transport |
 | Configuration and Flyway | Connect the components, validate settings and apply database migrations |
 
 ### API contracts
@@ -152,13 +157,13 @@ Destinations must be absolute HTTP or HTTPS addresses with a host, no embedded c
 └───────────────┬────────────────┘
                 │ Linked by short_code (primary / foreign key)
                 │ One link has zero or one usage row
-┌───────────────┴────────────────┐
-│         link_analytics         │
-│                                │
-│           Short code           │
-│    Recorded redirect count     │
-│      Latest recorded time      │
-└────────────────────────────────┘
+┌───────────────┴────────────────┐   ┌────────────────────────────────┐
+│         link_analytics         │   │   processed_redirect_events    │
+│                                │   │                                │
+│           Short code           │   │            Event ID            │
+│    Recorded redirect count     │   │         Processed time         │
+│      Latest recorded time      │   │                                │
+└────────────────────────────────┘   └────────────────────────────────┘
 ```
 
 Short codes are ten case-sensitive ASCII letters or digits.
@@ -166,6 +171,8 @@ Short codes are ten case-sensitive ASCII letters or digits.
 A destination fingerprint is a fixed-size SHA-256 value used for indexed lookup. The service also compares the full destination before reuse.
 
 Usage rows are created when events are first saved. A link without a usage row returns a count of zero and a null timestamp.
+
+`processed_redirect_events` holds the event IDs the Kafka consumer has counted. It is written in the same transaction as `link_analytics` and has no foreign key to `short_links`; events for a short code with no saved link get no row. It gains one row per counted event; no retention or cleanup is configured yet.
 
 Flyway applies migrations at startup. Migrations preserve existing links; conflicting destination data causes the reuse migration to stop and roll back without deleting or merging mappings.
 
@@ -235,13 +242,14 @@ LinkStore.findByCode via primary pool → short_links
 ┌──────────────────────────────────────────┐
 │             LinksController              │
 │ Construct 302 with destination Location  │
-│    Call RedirectRecorder.record(code)    │
+│   Call RedirectRecording.record(code)    │
 └───────┬──────────────────────────────────┘
         │
-        │ Offer event to queue; do not wait for capacity or a database write
-        │ Accepted → background flow below; full / closing → drop event
+        │ Kafka (default): send the event; wait at most 50 ms for topic metadata or buffer space
+        │ In-process: offer the event to the queue; never wait for capacity or a database write
+        │ Failures and drops are counted, never thrown to the request
         ▼
-Return 302 to caller in either case
+Return 302 to caller in every case
         │
         │ If the browser follows Location
         ▼
@@ -251,6 +259,71 @@ Browser sends a new request to the destination website
 The controller encodes international characters for the response header while preserving stored text and existing escapes. The browser contacts the destination; the shortener does not fetch it.
 
 <a id="analytics-contract"></a>
+
+Both transports deliver events to `JdbcAnalyticsWriter`, which owns a separate `LinkAnalyticsStore` instance and a connection pool of at most one connection. This separates its connection usage from request handling, but both still depend on the same PostgreSQL database.
+
+Updates add counts atomically and retain the latest event timestamp in UTC. Only successful GET redirects contribute to usage statistics; repeated requests and bots count. Creation, statistics reads and failed redirects do not.
+
+A recorded event means the service accepted a GET for redirection. It does not establish that the browser received the response or visited the destination.
+
+`shortener.analytics.transport` selects the transport: `kafka` (default) or `in-process`.
+
+<a id="kafka-transport"></a>
+
+#### Kafka transport (default)
+
+The publisher, consumer and writer run in the same application; Kafka sits between them. After the event is handed to the producer, the HTTP response and delivery proceed independently.
+
+```text
+Accepted GET redirect (short code)
+        │
+        ▼
+┌──────────────────────────────────────────┐
+│          KafkaRedirectPublisher          │
+│  New event: random event ID, short code  │
+│     and request time (UTC), as JSON      │
+│ Send to link-redirects, key = short code │
+└───────┬──────────────────────────────────┘
+        │ Idempotent producer, acks=all; the request does not wait for the broker
+        │ Acknowledged → published; send error or delivery timeout → failed (counted)
+        ▼
+┌──────────────────────────────────────────┐
+│        Kafka topic link-redirects        │
+│  Events for one code share a partition   │
+└───────┬──────────────────────────────────┘
+        │ Consumer group url-shortener-analytics; batches of up to 1,000 events
+        ▼
+┌──────────────────────────────────────────┐
+│          RedirectEventConsumer           │
+│    Skip malformed messages (counted)     │
+│   JdbcAnalyticsWriter.recordNewEvents    │
+└───────┬──────────────────────────────────┘
+        │ One transaction on the writer's own pool
+        ▼
+┌──────────────────────────────────────────┐
+│   1. Skip events whose short code has    │
+│   no saved link (counted as rejected)    │
+│    2. Insert the other event IDs into    │
+│  processed_redirect_events, skip known   │
+│    3. Add counts for new IDs only to     │
+│   link_analytics; keep the latest time   │
+└───────┬──────────────────────────────────┘
+        │
+        ├── Committed ────────────────────▶ Commit the batch's Kafka offsets
+        └── Error ────────────────────────▶ Roll back; keep offsets; retry the batch every second
+```
+
+The request thread waits inside the producer only while topic metadata is unavailable or the producer's buffer is full, and for at most 50 ms (`max.block.ms`). Otherwise, sending appends the event to an in-memory batch and returns. Before the web server starts, the publisher waits up to five seconds for topic metadata; if Kafka is unreachable, startup continues with a warning and events fail until Kafka is reachable.
+
+The broker creates `link-redirects` on first use (topic auto-creation). Local Compose gives new topics three partitions; where auto-creation is disabled, create the topic before starting the application, as the [README](../README.md#start-the-service) shows.
+
+Offsets are committed only after the database transaction commits. A failed write therefore leaves the batch uncommitted; the consumer pauses and retries the same batch every second, so a database outage delays statistics without losing acknowledged events. Only failures that a retry can cure reach this loop: an event that can never be saved, because its short code has no saved link or its timestamp is outside years 0001–9999 (the range the service can pass to PostgreSQL), is skipped and counted as rejected, so it cannot block the events behind it. Statistics can lag by the consumer's batch time plus any backlog.
+
+<a id="delivery-guarantee"></a>
+
+**Delivery guarantee.** Kafka delivers at least once: after a crash, a rebalance or an offset reset, an event can arrive again. Each event ID is saved in the same transaction as its count, so every event the broker acknowledges is counted once in `link_analytics`, provided it is consumed while Kafka still retains it (seven days by default) and its ID row is kept. This is not end-to-end exactly-once. An event is lost, and counted as a publish failure, when the producer cannot send it within 50 ms or the broker does not acknowledge it within the producer's two-minute delivery timeout. Events still in the producer's memory are lost if the process stops abruptly. The local broker keeps one copy of each event and has no volume, so removing its container discards events not yet saved.
+
+#### In-process transport
 
 The queue, worker and writer below run in the same application. After an event is queued, background processing and the HTTP response proceed independently; neither waits for the other.
 
@@ -290,12 +363,6 @@ Accepted redirect event (short code + request timestamp)
 
 The 250 ms setting limits batch formation, not how quickly statistics become visible. A backlog or slow write can delay them further.
 
-The writer owns a separate `LinkAnalyticsStore` instance and connection pool. This separates its connection usage from request handling, but both still depend on the same PostgreSQL database.
-
-Updates add counts atomically and retain the latest event timestamp in UTC. Only successful GET redirects contribute to usage statistics; repeated requests and bots count. Creation, statistics reads and failed redirects do not.
-
-A recorded event means the service accepted a GET for redirection. It does not establish that the browser received the response or visited the destination.
-
 ### Reading usage statistics
 
 ```text
@@ -334,15 +401,21 @@ The result returns through the service and controller to the caller. This path o
 | Malformed or unknown short code | Return `404`; malformed codes are rejected before database access |
 | Required database operation fails | Return a safe `503` with retry guidance |
 | Five code attempts are exhausted | Return `503` |
-| Recording queue is full | Drop the new event; continue the redirect |
-| A usage write fails | Mark the batch unconfirmed; do not retry because the original write may have committed |
-| Application stops normally | Stop admitting events, allow five seconds to drain and bound the recorder's shutdown wait to fifteen seconds |
-| Process stops abruptly | Queued events may be lost; saved totals remain |
+| Kafka is unreachable or topic metadata is unavailable | Each redirect waits at most 50 ms in the producer, then continues; the event counts as a publish failure and is not retried |
+| Kafka does not acknowledge an event | The producer retries within its two-minute delivery timeout, then the event counts as a publish failure; the redirect has already been returned |
+| Kafka: a usage write fails | Roll back event IDs and counts together; keep offsets uncommitted and retry the same batch every second |
+| Kafka: an event arrives again | Its event ID is already saved, so it counts as a duplicate and is not added again |
+| Kafka: a message is malformed, or its timestamp is outside years 0001–9999, the range the service can pass to PostgreSQL | Skip it and count it as rejected; retrying cannot make it valid |
+| Kafka: an event's short code has no saved link | Skip it, do not save its event ID, and count it as rejected, including repeated copies. The skip is permanent, even if the link is saved later; the service only publishes events for links it has already saved, so these come from a reset database or another producer |
+| In-process: recording queue is full | Drop the new event; continue the redirect |
+| In-process: a usage write fails | Mark the batch unconfirmed; do not retry because the original write may have committed |
+| Application stops normally | Kafka: the consumer finishes its current batch within ten seconds, and the producer sends buffered events, waiting at most 30 seconds. In-process: stop admitting events, allow five seconds to drain and bound the recorder's shutdown wait to fifteen seconds |
+| Process stops abruptly | Kafka: events in the producer's memory may be lost; uncommitted batches arrive again after restart and are deduplicated. In-process: queued events may be lost. Saved totals remain |
 
 The fifteen-second limit bounds how long the recorder waits. A stuck database driver may continue cleanup afterward.
 
 Database connections and queries have finite timeouts. These individual limits do not establish a single end-to-end response deadline.
 
-Internal counters track saved, dropped and unconfirmed events. They reset on restart. Only the health endpoint is exposed for operational checks; there is no public metrics endpoint.
+Internal counters track submitted, published, saved, duplicate, rejected, dropped, failed and unconfirmed events, as well as failed writes; rate-limited warnings in the log summarize losses and delays. They reset on restart. Only the health endpoint is exposed for operational checks; there is no public metrics endpoint.
 
 General checks belong in [Testing](testing.md). Performance methodology and results belong in [Measurements and results](measurements-and-results.md). Versions and local setup are in the [README](../README.md).

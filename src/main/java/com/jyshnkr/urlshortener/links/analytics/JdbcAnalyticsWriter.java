@@ -1,12 +1,15 @@
 package com.jyshnkr.urlshortener.links.analytics;
 
 import com.jyshnkr.urlshortener.links.dao.LinkAnalyticsStore;
+import com.jyshnkr.urlshortener.links.model.RedirectEvent;
+import com.jyshnkr.urlshortener.links.model.RedirectEventBatchResult;
 import com.jyshnkr.urlshortener.links.model.RedirectIncrement;
 import com.zaxxer.hikari.HikariDataSource;
 import java.util.List;
 import java.util.Properties;
 
-public final class JdbcAnalyticsWriter implements AnalyticsBatchWriter {
+/** Background usage writer with its own one-connection pool, used by either transport. */
+public final class JdbcAnalyticsWriter implements AnalyticsBatchWriter, RedirectEventWriter {
   private final HikariDataSource pool;
   private final LinkAnalyticsStore store;
 
@@ -33,6 +36,11 @@ public final class JdbcAnalyticsWriter implements AnalyticsBatchWriter {
   @Override
   public void write(List<RedirectIncrement> increments) {
     store.increment(increments);
+  }
+
+  @Override
+  public RedirectEventBatchResult recordNewEvents(List<RedirectEvent> events) {
+    return store.incrementNewEvents(events);
   }
 
   @Override

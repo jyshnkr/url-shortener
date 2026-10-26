@@ -2,8 +2,11 @@ package com.jyshnkr.urlshortener.performance;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.jyshnkr.urlshortener.links.analytics.KafkaRedirectPublisher;
+import com.jyshnkr.urlshortener.links.analytics.RedirectEventConsumer;
 import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder.Diagnostics;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Attempt;
+import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.KafkaDiagnostics;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Outcome;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,6 +51,65 @@ class RedirectPerformanceReportTest {
             new Diagnostics(5, 5, 0, 0, 0, 0, 0, false))) {
       assertThat(
               RedirectPerformanceReport.summarizeAnalytics(
+                      expected, expected, 0.1, true, diagnostics, "")
+                  .passed())
+          .isFalse();
+    }
+  }
+
+  @Test
+  void kafkaAnalyticsRequiresExactPerCodeCountsAndNoFailedRejectedOrPendingEvents() {
+    var expected = Map.of("one", 2L, "two", 3L);
+    var good =
+        new KafkaDiagnostics(
+            new KafkaRedirectPublisher.Diagnostics(5, 5, 0),
+            new RedirectEventConsumer.Diagnostics(5, 5, 0, 0, 0));
+    assertThat(
+            RedirectPerformanceReport.summarizeKafkaAnalytics(
+                    expected, expected, 0.1, true, good, "")
+                .passed())
+        .isTrue();
+    // Redelivered copies that were recognized and skipped do not fail the run.
+    var redelivered =
+        new KafkaDiagnostics(
+            new KafkaRedirectPublisher.Diagnostics(5, 5, 0),
+            new RedirectEventConsumer.Diagnostics(7, 5, 2, 0, 0));
+    assertThat(
+            RedirectPerformanceReport.summarizeKafkaAnalytics(
+                    expected, expected, 0.1, true, redelivered, "")
+                .passed())
+        .isTrue();
+    assertThat(
+            RedirectPerformanceReport.summarizeKafkaAnalytics(
+                    expected, Map.of("one", 3L, "two", 2L), 0.1, true, good, "")
+                .passed())
+        .isFalse();
+    assertThat(
+            RedirectPerformanceReport.summarizeKafkaAnalytics(
+                    expected, expected, 10, false, good, "")
+                .passed())
+        .isFalse();
+    assertThat(
+            RedirectPerformanceReport.summarizeKafkaAnalytics(
+                    expected, Map.of(), 0.1, true, good, "DataAccessException")
+                .passed())
+        .isFalse();
+    for (var diagnostics :
+        List.of(
+            new KafkaDiagnostics(
+                new KafkaRedirectPublisher.Diagnostics(6, 5, 1),
+                new RedirectEventConsumer.Diagnostics(5, 5, 0, 0, 0)),
+            new KafkaDiagnostics(
+                new KafkaRedirectPublisher.Diagnostics(5, 4, 0),
+                new RedirectEventConsumer.Diagnostics(4, 4, 0, 0, 0)),
+            new KafkaDiagnostics(
+                new KafkaRedirectPublisher.Diagnostics(5, 5, 0),
+                new RedirectEventConsumer.Diagnostics(6, 5, 0, 1, 0)),
+            new KafkaDiagnostics(
+                new KafkaRedirectPublisher.Diagnostics(5, 5, 0),
+                new RedirectEventConsumer.Diagnostics(5, 5, 0, 0, 1)))) {
+      assertThat(
+              RedirectPerformanceReport.summarizeKafkaAnalytics(
                       expected, expected, 0.1, true, diagnostics, "")
                   .passed())
           .isFalse();

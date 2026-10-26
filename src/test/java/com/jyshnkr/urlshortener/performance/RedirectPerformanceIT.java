@@ -3,7 +3,9 @@ package com.jyshnkr.urlshortener.performance;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.jyshnkr.urlshortener.UrlShortenerApplication;
+import com.jyshnkr.urlshortener.links.analytics.KafkaRedirectPublisher;
 import com.jyshnkr.urlshortener.links.analytics.RecordingSettings;
+import com.jyshnkr.urlshortener.links.analytics.RedirectEventConsumer;
 import com.jyshnkr.urlshortener.links.analytics.RedirectRecorder;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Attempt;
 import com.jyshnkr.urlshortener.performance.RedirectPerformanceReport.Outcome;
@@ -36,11 +38,14 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.sql.DataSource;
+import org.apache.kafka.common.utils.AppInfoParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -52,32 +57,57 @@ class RedirectPerformanceIT {
   private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration WARM_UP = Duration.ofSeconds(15);
   private static final Duration MEASUREMENT = Duration.ofSeconds(60);
+  private static final Duration RECORDING_DRAIN_LIMIT = Duration.ofSeconds(10);
+  private static final String KAFKA_IMAGE = "apache/kafka:4.2.2";
+
+  /** kafka (the application default) or in-process, which reproduces the earlier runs. */
+  private static final String TRANSPORT =
+      System.getProperty("performance.analytics.transport", "kafka");
 
   private record SavedLink(HttpRequest request, String destination, String code) {}
 
   private record Phase(Instant timestamp, List<Attempt> attempts) {}
 
+  private record Persisted(Map<String, Long> counts, String readFailure) {}
+
   @Test
   @Timeout(value = 5, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   void atLeast95PercentOfRedirectsCompleteWithin100MsWithoutErrors() throws Exception {
+    assertThat(TRANSPORT).as("performance.analytics.transport").isIn("kafka", "in-process");
+    boolean kafka = "kafka".equals(TRANSPORT);
     var metadata = environment();
-    try (var database = new PostgreSQLContainer("postgres:17.11")) {
+    try (var database = new PostgreSQLContainer("postgres:17.11");
+        var broker = kafka ? new KafkaContainer(KAFKA_IMAGE) : null) {
       database.withStartupTimeout(Duration.ofSeconds(60));
       database.start();
-      try (var application =
-          new SpringApplicationBuilder(UrlShortenerApplication.class)
-              .run(
+      var arguments =
+          new ArrayList<>(
+              List.of(
                   "--server.port=0",
                   "--server.address=127.0.0.1",
                   "--spring.datasource.url=" + database.getJdbcUrl(),
                   "--spring.datasource.username=" + database.getUsername(),
-                  "--spring.datasource.password=" + database.getPassword())) {
+                  "--spring.datasource.password=" + database.getPassword(),
+                  "--shortener.analytics.transport=" + TRANSPORT));
+      if (broker != null) {
+        broker.withStartupTimeout(Duration.ofSeconds(60));
+        broker.start();
+        arguments.add("--spring.kafka.bootstrap-servers=" + broker.getBootstrapServers());
+        metadata.put("kafkaImage", broker.getDockerImageName());
+        metadata.put("kafkaClientVersion", AppInfoParser.getVersion());
+      }
+      try (var application =
+          new SpringApplicationBuilder(UrlShortenerApplication.class)
+              .run(arguments.toArray(String[]::new))) {
         metadata.put(
             "postgresqlVersion",
             application
                 .getBean(JdbcTemplate.class)
                 .queryForObject("SELECT version()", String.class));
         metadata.put("postgresqlImage", database.getDockerImageName());
+        metadata.put(
+            "analyticsSettings",
+            kafka ? kafkaSettings(application.getEnvironment()) : RecordingSettings.defaults());
         int port = ((WebServerApplicationContext) application).getWebServer().getPort();
         var clients = new ArrayList<HttpClient>();
         var workers = Executors.newFixedThreadPool(CLIENTS);
@@ -96,13 +126,17 @@ class RedirectPerformanceIT {
           assertThat(warmUp.attempts()).isNotEmpty().allMatch(a -> a.outcome() == Outcome.VALID);
           System.out.println("Warm-up complete; measuring ten clients for 60 seconds.");
           var measured = runPhase(workers, clients, links, MEASUREMENT);
+          var expected = expectedCounts(links, warmUp, measured);
+          var source = application.getBean(DataSource.class);
           var analytics =
-              verifyAnalytics(
-                  application.getBean(RedirectRecorder.class),
-                  application.getBean(DataSource.class),
-                  links,
-                  warmUp,
-                  measured);
+              kafka
+                  ? verifyKafkaAnalytics(
+                      application.getBean(KafkaRedirectPublisher.class),
+                      application.getBean(RedirectEventConsumer.class),
+                      source,
+                      expected)
+                  : verifyQueueAnalytics(
+                      application.getBean(RedirectRecorder.class), source, expected);
           metadata.put("measurementStartedAt", measured.timestamp().toString());
           var summary =
               RedirectPerformanceReport.summarize(measured.attempts(), MEASUREMENT.toNanos());
@@ -170,13 +204,7 @@ class RedirectPerformanceIT {
     return List.copyOf(links);
   }
 
-  private RedirectPerformanceReport.Analytics verifyAnalytics(
-      RedirectRecorder recorder,
-      DataSource source,
-      List<SavedLink> links,
-      Phase warmUp,
-      Phase measured)
-      throws InterruptedException {
+  private Map<String, Long> expectedCounts(List<SavedLink> links, Phase warmUp, Phase measured) {
     var expected = new HashMap<String, Long>();
     links.forEach(link -> expected.put(link.code(), 0L));
     for (var phase : List.of(warmUp, measured)) {
@@ -186,9 +214,15 @@ class RedirectPerformanceIT {
         }
       }
     }
+    return expected;
+  }
+
+  private RedirectPerformanceReport.Analytics verifyQueueAnalytics(
+      RedirectRecorder recorder, DataSource source, Map<String, Long> expected)
+      throws InterruptedException {
     long total = expected.values().stream().mapToLong(Long::longValue).sum();
     long before = System.nanoTime();
-    long deadline = before + Duration.ofSeconds(10).toNanos();
+    long deadline = before + RECORDING_DRAIN_LIMIT.toNanos();
     var diagnostics = recorder.diagnostics();
     while (System.nanoTime() < deadline
         && (diagnostics.confirmedWrites() < total
@@ -203,8 +237,42 @@ class RedirectPerformanceIT {
             && diagnostics.queued() == 0
             && diagnostics.inFlight() == 0
             && System.nanoTime() <= deadline;
+    var persisted = readPersisted(source);
+    return RedirectPerformanceReport.summarizeAnalytics(
+        expected, persisted.counts(), drainSeconds, drained, diagnostics, persisted.readFailure());
+  }
+
+  private RedirectPerformanceReport.Analytics verifyKafkaAnalytics(
+      KafkaRedirectPublisher publisher,
+      RedirectEventConsumer consumer,
+      DataSource source,
+      Map<String, Long> expected)
+      throws InterruptedException {
+    long total = expected.values().stream().mapToLong(Long::longValue).sum();
+    long before = System.nanoTime();
+    long deadline = before + RECORDING_DRAIN_LIMIT.toNanos();
+    var diagnostics =
+        new RedirectPerformanceReport.KafkaDiagnostics(
+            publisher.diagnostics(), consumer.diagnostics());
+    while (System.nanoTime() < deadline
+        && (diagnostics.publisher().pending() != 0 || diagnostics.consumer().recorded() < total)) {
+      TimeUnit.MILLISECONDS.sleep(10);
+      diagnostics =
+          new RedirectPerformanceReport.KafkaDiagnostics(
+              publisher.diagnostics(), consumer.diagnostics());
+    }
+    double drainSeconds = (System.nanoTime() - before) / 1_000_000_000.0;
+    boolean drained =
+        diagnostics.publisher().pending() == 0
+            && diagnostics.consumer().recorded() == total
+            && System.nanoTime() <= deadline;
+    var persisted = readPersisted(source);
+    return RedirectPerformanceReport.summarizeKafkaAnalytics(
+        expected, persisted.counts(), drainSeconds, drained, diagnostics, persisted.readFailure());
+  }
+
+  private Persisted readPersisted(DataSource source) {
     var persisted = new HashMap<String, Long>();
-    String failure = "";
     try {
       // Verification reads happen outside HTTP measurement and after the bounded analytics drain.
       var jdbc = new JdbcTemplate(source);
@@ -215,10 +283,24 @@ class RedirectPerformanceIT {
             persisted.put(row.getString("short_code"), row.getLong("redirect_count"));
           });
     } catch (RuntimeException readFailure) {
-      failure = readFailure.getClass().getSimpleName();
+      return new Persisted(persisted, readFailure.getClass().getSimpleName());
     }
-    return RedirectPerformanceReport.summarizeAnalytics(
-        expected, persisted, drainSeconds, drained, diagnostics, failure);
+    return new Persisted(persisted, "");
+  }
+
+  private static Map<String, Object> kafkaSettings(Environment environment) {
+    var settings = new LinkedHashMap<String, Object>();
+    for (String key :
+        List.of(
+            "shortener.analytics.kafka.topic",
+            "spring.kafka.producer.acks",
+            "spring.kafka.producer.properties[enable.idempotence]",
+            "spring.kafka.producer.properties[max.block.ms]",
+            "spring.kafka.consumer.max-poll-records",
+            "spring.kafka.listener.ack-mode")) {
+      settings.put(key, environment.getProperty(key));
+    }
+    return settings;
   }
 
   private Phase runPhase(
@@ -344,8 +426,8 @@ class RedirectPerformanceIT {
     metadata.put("jvm", System.getProperty("java.vm.name"));
     metadata.put("javaVersion", System.getProperty("java.runtime.version"));
     metadata.put("javaVendor", System.getProperty("java.vendor"));
-    metadata.put("analyticsSettings", RecordingSettings.defaults());
-    metadata.put("analyticsDrainLimitSeconds", 10);
+    metadata.put("analyticsTransport", TRANSPORT);
+    metadata.put("analyticsDrainLimitSeconds", RECORDING_DRAIN_LIMIT.toSeconds());
     metadata.put(
         "analyticsExpectedScope",
         "All valid GET redirects in warm-up and measurement, checked per saved code");
@@ -375,7 +457,9 @@ class RedirectPerformanceIT {
     metadata.put(
         "methodology",
         "Local closed-loop baseline; app and generator share a JVM; "
-            + "disposable PostgreSQL; nearest-rank percentiles over all attempts; "
+            + "disposable PostgreSQL"
+            + ("kafka".equals(TRANSPORT) ? " and single-broker Kafka" : "")
+            + "; nearest-rank percentiles over all attempts; "
             + "completed requests/s = all completed attempts / (measurement + final drain); "
             + "startup, creation, warm-up and destination loading excluded");
     return metadata;

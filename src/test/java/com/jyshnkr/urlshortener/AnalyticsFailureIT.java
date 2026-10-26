@@ -32,7 +32,10 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.test.annotation.DirtiesContext;
 import tools.jackson.databind.json.JsonMapper;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// Replaces the in-process recorder, so the application uses that transport.
+@SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    properties = "shortener.analytics.transport=in-process")
 @Import({TestcontainersConfig.class, AnalyticsFailureIT.ControlledRecording.class})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AnalyticsFailureIT {

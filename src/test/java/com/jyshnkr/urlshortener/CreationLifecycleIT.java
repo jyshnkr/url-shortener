@@ -187,9 +187,11 @@ class CreationLifecycleIT {
 
   private ConfigurableApplicationContext start(
       PostgreSQLContainer database, String baseUrl, String jdbcUrl) {
+    // Creation does not depend on usage recording; avoid an unrelated broker dependency.
     return new SpringApplicationBuilder(UrlShortenerApplication.class)
         .run(
             "--server.port=0",
+            "--shortener.analytics.transport=in-process",
             "--spring.datasource.url=" + jdbcUrl,
             "--spring.datasource.username=" + database.getUsername(),
             "--spring.datasource.password=" + database.getPassword(),

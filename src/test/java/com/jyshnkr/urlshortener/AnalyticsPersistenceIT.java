@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.jyshnkr.urlshortener.links.config.LinksSettings;
 import com.jyshnkr.urlshortener.links.dao.LinkAnalyticsStore;
 import com.jyshnkr.urlshortener.links.dao.LinkStore;
+import com.jyshnkr.urlshortener.links.model.RedirectEvent;
+import com.jyshnkr.urlshortener.links.model.RedirectEventBatchResult;
 import com.jyshnkr.urlshortener.links.model.RedirectIncrement;
 import com.jyshnkr.urlshortener.links.service.LinkAnalyticsService;
 import com.jyshnkr.urlshortener.links.service.LinkCreationService;
@@ -17,6 +19,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -119,6 +122,168 @@ class AnalyticsPersistenceIT {
   }
 
   @Test
+  void eventIdsAreCountedOnceAcrossRedeliveredBatchesAndSimultaneousWriters() throws Exception {
+    try (var database = new PostgreSQLContainer("postgres:17.11")) {
+      database.start();
+      migrate(database, null);
+      var dataSource = source(database);
+      for (String code : List.of("Stored0001", "Stored0002")) {
+        new LinkCreationService(
+                new LinkStore(dataSource), new LinksSettings("https://short.example"), () -> code)
+            .create("https://example.invalid/" + code);
+      }
+      var store = new LinkAnalyticsStore(dataSource);
+      Instant newest = Instant.parse("2026-10-25T12:00:00.654321Z");
+      var older = new RedirectEvent(UUID.randomUUID(), "Stored0001", newest.minusSeconds(5));
+      var latest = new RedirectEvent(UUID.randomUUID(), "Stored0001", newest);
+      var other = new RedirectEvent(UUID.randomUUID(), "Stored0002", newest.minusSeconds(1));
+
+      // A repeated ID within one batch, then a redelivered batch.
+      assertThat(store.incrementNewEvents(List.of(older, latest, older, other)).counted())
+          .isEqualTo(3);
+      assertThat(store.incrementNewEvents(List.of(other, latest)).counted()).isZero();
+
+      // Eight writers race to save the same new event; exactly one counts it.
+      var raced = new RedirectEvent(UUID.randomUUID(), "Stored0002", newest.minusSeconds(100));
+      var barrier = new CyclicBarrier(8);
+      long counted = 0;
+      try (var callers = Executors.newFixedThreadPool(8)) {
+        var tasks = new ArrayList<Future<Integer>>();
+        for (int i = 0; i < 8; i++) {
+          tasks.add(
+              callers.submit(
+                  () -> {
+                    barrier.await(5, TimeUnit.SECONDS);
+                    return new LinkAnalyticsStore(dataSource)
+                        .incrementNewEvents(List.of(raced, older))
+                        .counted();
+                  }));
+        }
+        for (var task : tasks) {
+          counted += task.get(10, TimeUnit.SECONDS);
+        }
+      }
+      assertThat(counted).isEqualTo(1);
+
+      var service = new LinkAnalyticsService(store);
+      assertThat(service.stats("Stored0001").redirectCount()).isEqualTo(2);
+      assertThat(service.stats("Stored0001").lastRedirectedAt()).isEqualTo(newest);
+      assertThat(service.stats("Stored0002").redirectCount()).isEqualTo(2);
+      assertThat(service.stats("Stored0002").lastRedirectedAt()).isEqualTo(newest.minusSeconds(1));
+      assertThat(
+              new JdbcTemplate(dataSource)
+                  .queryForObject("SELECT count(*) FROM processed_redirect_events", Long.class))
+          .isEqualTo(4);
+    }
+  }
+
+  @Test
+  void aFailedCounterUpdateSavesNoneOfTheBatchsEventIds() {
+    try (var database = new PostgreSQLContainer("postgres:17.11")) {
+      database.start();
+      migrate(database, null);
+      var dataSource = source(database);
+      new LinkCreationService(
+              new LinkStore(dataSource),
+              new LinksSettings("https://short.example"),
+              () -> "Stored0001")
+          .create("https://example.invalid/Stored0001");
+      var store = new LinkAnalyticsStore(dataSource);
+      var saved = new RedirectEvent(UUID.randomUUID(), "Stored0001", Instant.now());
+      // PostgreSQL cannot parse this time as text, so the counter update fails after the event IDs
+      // are inserted and the whole transaction rolls back.
+      var unstorable = new RedirectEvent(UUID.randomUUID(), "Stored0001", Instant.MAX);
+
+      assertThatThrownBy(() -> store.incrementNewEvents(List.of(saved, unstorable)))
+          .isInstanceOf(DataIntegrityViolationException.class);
+
+      var jdbc = new JdbcTemplate(dataSource);
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_redirect_events", Long.class))
+          .isZero();
+      assertThat(new LinkAnalyticsService(store).stats("Stored0001").redirectCount()).isZero();
+      // Retrying only the valid event afterwards still counts it.
+      assertThat(store.incrementNewEvents(List.of(saved)).counted()).isEqualTo(1);
+      assertThat(new LinkAnalyticsService(store).stats("Stored0001").redirectCount()).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void eventsForShortCodesWithoutASavedLinkAreSkippedWithoutSavingTheirIds() {
+    try (var database = new PostgreSQLContainer("postgres:17.11")) {
+      database.start();
+      migrate(database, null);
+      var dataSource = source(database);
+      new LinkCreationService(
+              new LinkStore(dataSource),
+              new LinksSettings("https://short.example"),
+              () -> "Stored0001")
+          .create("https://example.invalid/Stored0001");
+      var store = new LinkAnalyticsStore(dataSource);
+      var saved = new RedirectEvent(UUID.randomUUID(), "Stored0001", Instant.now());
+      var unknown = new RedirectEvent(UUID.randomUUID(), "Absent1234", Instant.now());
+
+      assertThat(store.incrementNewEvents(List.of(saved, unknown)))
+          .isEqualTo(new RedirectEventBatchResult(1, 1));
+
+      var jdbc = new JdbcTemplate(dataSource);
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM processed_redirect_events", Long.class))
+          .isEqualTo(1);
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM link_analytics", Long.class))
+          .isEqualTo(1);
+      // Redelivery: the counted event is a duplicate, and the unknown one is still skipped.
+      assertThat(store.incrementNewEvents(List.of(saved, unknown)))
+          .isEqualTo(new RedirectEventBatchResult(0, 1));
+      assertThat(store.incrementNewEvents(List.of(unknown)))
+          .isEqualTo(new RedirectEventBatchResult(0, 1));
+      // Every copy of an unknown event is reported, including one repeated within the batch.
+      assertThat(store.incrementNewEvents(List.of(unknown, saved, unknown)))
+          .isEqualTo(new RedirectEventBatchResult(0, 2));
+      assertThat(new LinkAnalyticsService(store).stats("Stored0001").redirectCount()).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void timestampsAtTheEdgesOfTheRangeTheEventFormatAcceptsAreStored() {
+    try (var database = new PostgreSQLContainer("postgres:17.11")) {
+      database.start();
+      migrate(database, null);
+      var dataSource = source(database);
+      new LinkCreationService(
+              new LinkStore(dataSource),
+              new LinksSettings("https://short.example"),
+              () -> "Stored0001")
+          .create("https://example.invalid/Stored0001");
+      var store = new LinkAnalyticsStore(dataSource);
+      var earliest =
+          new RedirectEvent(UUID.randomUUID(), "Stored0001", Instant.parse("0001-01-01T00:00:00Z"));
+      var latest =
+          new RedirectEvent(
+              UUID.randomUUID(), "Stored0001", Instant.parse("9999-12-31T23:59:59.999999999Z"));
+
+      assertThat(store.incrementNewEvents(List.of(earliest)))
+          .isEqualTo(new RedirectEventBatchResult(1, 0));
+      assertThat(store.incrementNewEvents(List.of(latest)))
+          .isEqualTo(new RedirectEventBatchResult(1, 0));
+
+      var jdbc = new JdbcTemplate(dataSource);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT redirect_count FROM link_analytics WHERE short_code = 'Stored0001'",
+                  Long.class))
+          .isEqualTo(2);
+      // PostgreSQL keeps microseconds, so the latest time is stored at or just after this instant.
+      assertThat(
+              jdbc.queryForObject(
+                  """
+                  SELECT last_redirected_at >= TIMESTAMPTZ '9999-12-31 23:59:59.999999+00'
+                  FROM link_analytics WHERE short_code = 'Stored0001'
+                  """,
+                  Boolean.class))
+          .isTrue();
+    }
+  }
+
+  @Test
   void gracefulRestartKeepsRecordedCountsAndDatabaseOutageReturnsSafeStats503() throws Exception {
     var json = JsonMapper.builder().build();
     try (var database = new PostgreSQLContainer("postgres:17.11");
@@ -167,12 +332,15 @@ class AnalyticsPersistenceIT {
   }
 
   private ConfigurableApplicationContext start(PostgreSQLContainer database) {
+    // The restart check relies on the in-process recorder's shutdown drain. The Kafka equivalent
+    // is in KafkaAnalyticsLifecycleIT.
     return new SpringApplicationBuilder(UrlShortenerApplication.class)
         .run(
             "--server.port=0",
             "--spring.datasource.url=" + database.getJdbcUrl(),
             "--spring.datasource.username=" + database.getUsername(),
-            "--spring.datasource.password=" + database.getPassword());
+            "--spring.datasource.password=" + database.getPassword(),
+            "--shortener.analytics.transport=in-process");
   }
 
   private HttpResponse<String> get(
